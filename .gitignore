@@ -1,0 +1,39 @@
+# Rust
+target/
+target-linux/
+*.rlib
+*.rmeta
+**/*.rs.bk
+
+# WASM binaries
+*.wasm
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (for docs)
+node_modules/
+
+# Env
+.env
+
+# Legacy/temp
+.img
+
+# Wasmtime AOT compiled cache
+*.aot
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local config
+.scripts/
+.notes/
+.claude/
+CLAUDE.md
