@@ -1,0 +1,27 @@
+[package]
+name = "echo"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt.workspace = true
+
+[package.metadata.component]
+package = "test:echo"
+
+[package.metadata.component.target]
+path = "wit"
+world = "handler"
+
+[package.metadata.component.target.dependencies]
+"wasi:http" = { path = "../wit-deps/http" }
+"wasi:io" = { path = "../wit-deps/io" }
+"wasi:clocks" = { path = "../wit-deps/clocks" }
+"wasi:random" = { path = "../wit-deps/random" }
+"wasi:cli" = { path = "../wit-deps/cli" }
+"wasi:filesystem" = { path = "../wit-deps/filesystem" }
+"wasi:sockets" = { path = "../wit-deps/sockets" }

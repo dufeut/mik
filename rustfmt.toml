@@ -1,0 +1,43 @@
+# Rust formatting configuration for mik
+# Only using stable rustfmt features
+
+# Edition
+edition = "2021"
+
+# Maximum line width
+max_width = 100
+
+# Use spaces for indentation (4 spaces)
+hard_tabs = false
+tab_spaces = 4
+
+# Reorder imports alphabetically
+reorder_imports = true
+reorder_modules = true
+
+# Use field init shorthand (e.g., SomeStruct { field } instead of { field: field })
+use_field_init_shorthand = true
+
+# Chain layout - wrap long method chains
+chain_width = 60
+
+# Match block trailing comma
+match_block_trailing_comma = true
+
+# === Unstable Features (commented out) ===
+# To use these, run: rustfmt --config-path rustfmt.toml --unstable-features
+
+# fn_params_layout = "Tall"
+# brace_style = "SameLineWhere"
+# imports_granularity = "Crate"
+# group_imports = "StdExternalCrate"
+# format_strings = true
+# format_generated_files = false
+# reorder_impl_items = false
+# comment_width = 100
+# wrap_comments = true
+# struct_lit_single_line = true
+# blank_lines_upper_bound = 2
+# blank_lines_lower_bound = 0
+# spaces_around_ranges = false
+# normalize_doc_attributes = true

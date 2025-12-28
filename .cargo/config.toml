@@ -1,0 +1,5 @@
+# Override parent workspace - mik CLI builds for native target
+[build]
+target = "x86_64-pc-windows-msvc"
+# Limit parallel jobs to prevent stack overflow during linking on Windows
+jobs = 2

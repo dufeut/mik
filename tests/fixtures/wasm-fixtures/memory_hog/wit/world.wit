@@ -1,0 +1,5 @@
+package test:memory-hog@0.1.0;
+
+world handler {
+    include wasi:http/proxy@0.2.0;
+}

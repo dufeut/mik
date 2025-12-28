@@ -1,0 +1,32 @@
+[package]
+name = "mik-bench"
+version = "0.1.0"
+edition = "2024"
+description = "High-performance HTTP benchmark tool for mik"
+
+[[bin]]
+name = "mik-bench"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP client with connection pooling
+reqwest = { version = "0.12", features = ["blocking"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Statistics
+hdrhistogram = "7"
+
+# Sync primitives
+parking_lot = "0.12"
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

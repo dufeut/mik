@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "echo",
+    "panic",
+    "infinite_loop",
+    "memory_hog",
+    "fuel_burner",
+    "slow_response",
+    "oversized_response",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+wit-bindgen-rt = "0.44.0"
+
+[profile.release]
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,2 @@
+# Built WASM test fixtures (rebuild with wasm-fixtures/build.sh)
+*.wasm
