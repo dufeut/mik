@@ -1,24 +1,28 @@
 # hello-python - WASI HTTP component in Python using componentize-py
 from wit_world import exports
+from componentize_py_types import Ok
 from wit_world.imports.types import (
-    IncomingRequest, ResponseOutparam, OutgoingResponse, Fields, OutgoingBody
+    IncomingRequest, ResponseOutparam,
+    OutgoingResponse, Fields, OutgoingBody
 )
 
 class IncomingHandler(exports.IncomingHandler):
-    def handle(self, request: IncomingRequest, response_out: ResponseOutparam):
-        # Create empty fields (headers)
-        fields = Fields()
+    def handle(self, _: IncomingRequest, response_out: ResponseOutparam):
+        # Construct the HTTP response with Content-Type header
+        outgoingResponse = OutgoingResponse(Fields.from_list([
+            ("content-type", b"application/json"),
+        ]))
+        outgoingResponse.set_status_code(200)
 
-        # Create response
-        response = OutgoingResponse(fields)
-        response.set_status_code(200)
-        body = response.body()
+        # Get body handle
+        outgoingBody = outgoingResponse.body()
 
         # Set response BEFORE writing body (WASI HTTP requirement)
-        ResponseOutparam.set(response_out, response)
+        # Must use Ok() wrapper from componentize_py_types
+        ResponseOutparam.set(response_out, Ok(outgoingResponse))
 
         # Write body
-        body.write().blocking_write_and_flush(
+        outgoingBody.write().blocking_write_and_flush(
             b'{"message":"Hello from Python!","lang":"python"}'
         )
-        OutgoingBody.finish(body, None)
+        OutgoingBody.finish(outgoingBody, None)

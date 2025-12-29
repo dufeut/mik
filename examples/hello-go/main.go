@@ -1,4 +1,5 @@
 // hello-go - WASI HTTP component in Go using TinyGo
+// NOTE: Go components may hang on mik runtime. Use tests/fixtures/multilang/go/hello-go.wasm
 package main
 
 import (
@@ -11,7 +12,7 @@ func init() {
 	wasihttp.Handle(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"Hello from Go!","lang":"go","path":"` + r.URL.Path + `"}`))
+		w.Write([]byte(`{"message":"Hello from Go!","lang":"go"}`))
 	})
 }
 
