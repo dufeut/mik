@@ -1,5 +1,5 @@
 // hello-go - WASI HTTP component in Go using TinyGo
-// NOTE: Go components may hang on mik runtime. Use tests/fixtures/multilang/go/hello-go.wasm
+// See README.md for known issues with Go WASI HTTP components
 package main
 
 import (
