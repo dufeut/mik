@@ -1,0 +1,9 @@
+# JavaScript/Node
+node_modules/
+*.wasm
+!dist/*.wasm
+
+# Build artifacts
+dist/
+wasi-http/
+wit/deps/

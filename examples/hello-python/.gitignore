@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.wasm
+.venv/
+venv/
+
+# componentize-py generated
+wit_world/
+componentize_py_async_support/
+componentize_py_runtime.pyi
+componentize_py_types.py
+poll_loop.py
+
+# WASI HTTP WIT (cloned)
+wasi-http/
+wit/
+
+# Build artifacts
+dist/

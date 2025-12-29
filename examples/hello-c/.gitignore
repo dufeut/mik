@@ -1,0 +1,11 @@
+# C build artifacts
+*.o
+*.wasm
+!dist/*.wasm
+
+# Generated bindings
+gen/
+
+# Build artifacts
+dist/
+wasi-http/
