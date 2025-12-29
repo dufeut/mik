@@ -5,6 +5,7 @@
 //!
 //! - Round-robin load balancing
 //! - Weighted round-robin load balancing (proportional traffic distribution)
+//! - Consistent hashing for sticky sessions (path, header, or client IP based)
 //! - Health checks with automatic failover
 //! - Connection pooling via reqwest
 //! - Graceful shutdown with request draining
@@ -32,14 +33,25 @@
 //! ```
 
 mod backend;
+mod circuit_breaker;
 mod health;
+pub mod metrics;
 mod proxy;
+mod reload;
 mod selection;
 
-pub use backend::Backend;
+#[allow(unused_imports)]
+pub use backend::{Backend, BackendState};
+#[allow(unused_imports)]
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState};
 pub use health::{HealthCheckConfig, HealthCheckType};
+#[allow(unused_imports)]
+pub use metrics::LbMetrics;
 pub use proxy::ProxyService;
-pub use selection::RoundRobin;
+#[allow(unused_imports)]
+pub use reload::{ReloadConfig, ReloadHandle, ReloadManager, ReloadResult, ReloadSignal};
+#[allow(unused_imports)]
+pub use selection::{ConsistentHash, KeyExtractor, RoundRobin};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -256,6 +268,106 @@ impl LoadBalancer {
     #[allow(dead_code)]
     pub async fn total_count(&self) -> usize {
         self.backends.read().await.len()
+    }
+
+    /// Get the shared backends reference for use with ReloadManager.
+    ///
+    /// This allows creating a ReloadManager that can dynamically update
+    /// the backend list without restarting the load balancer.
+    #[allow(dead_code)]
+    pub fn backends(&self) -> Arc<RwLock<Vec<Backend>>> {
+        self.backends.clone()
+    }
+
+    /// Get the shared selection reference for use with ReloadManager.
+    #[allow(dead_code)]
+    pub fn selection(&self) -> Arc<RwLock<RoundRobin>> {
+        self.selection.clone()
+    }
+
+    /// Create a ReloadManager for this load balancer.
+    ///
+    /// The ReloadManager allows dynamically updating the backend list
+    /// with graceful draining of removed backends.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use mik::runtime::lb::{LoadBalancer, ReloadConfig};
+    /// use std::time::Duration;
+    ///
+    /// let lb = LoadBalancer::from_backends(
+    ///     "0.0.0.0:3000".parse().unwrap(),
+    ///     vec!["127.0.0.1:3001".to_string()],
+    /// );
+    ///
+    /// let reload_config = ReloadConfig {
+    ///     drain_timeout: Duration::from_secs(30),
+    /// };
+    ///
+    /// let manager = lb.reload_manager(reload_config);
+    ///
+    /// // Add a new backend dynamically
+    /// manager.add_backend("127.0.0.1:3002".to_string()).await;
+    ///
+    /// // Remove a backend with graceful draining
+    /// manager.remove_backend("127.0.0.1:3001").await;
+    /// ```
+    #[allow(dead_code)]
+    pub fn reload_manager(&self, config: ReloadConfig) -> ReloadManager {
+        ReloadManager::new(config, self.backends.clone(), self.selection.clone())
+    }
+
+    /// Update the backend list atomically.
+    ///
+    /// This is a simpler alternative to using ReloadManager when you
+    /// don't need graceful draining. New backends are added immediately
+    /// and removed backends are removed immediately.
+    ///
+    /// For graceful draining, use `reload_manager()` instead.
+    #[allow(dead_code)]
+    pub async fn update_backends(&self, new_backends: Vec<String>) {
+        let backends: Vec<Backend> = new_backends
+            .iter()
+            .map(|addr| Backend::new(addr.clone()))
+            .collect();
+
+        let mut backends_write = self.backends.write().await;
+        let mut selection_write = self.selection.write().await;
+
+        *selection_write = RoundRobin::new(backends.len());
+        *backends_write = backends;
+
+        info!(count = backends_write.len(), "Backend list updated");
+    }
+
+    /// Drain a specific backend by marking it unhealthy.
+    ///
+    /// The backend will stop receiving new requests but will continue
+    /// to serve existing connections until they complete.
+    ///
+    /// Returns true if the backend was found and marked for draining.
+    #[allow(dead_code)]
+    pub async fn drain_backend(&self, address: &str) -> bool {
+        let backends = self.backends.read().await;
+        for backend in backends.iter() {
+            if backend.address() == address {
+                backend.mark_unhealthy();
+                info!(address = %address, "Backend marked for draining");
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get the number of active requests on a specific backend.
+    #[allow(dead_code)]
+    pub async fn backend_active_requests(&self, address: &str) -> Option<u64> {
+        let backends = self.backends.read().await;
+        backends
+            .iter()
+            .find(|b| b.address() == address)
+            .map(|b| b.active_requests())
     }
 }
 

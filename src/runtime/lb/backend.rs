@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use parking_lot::RwLock;
 
+use super::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
+
 /// State of a backend server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -15,6 +17,8 @@ pub enum BackendState {
     Unhealthy,
     /// Backend health is unknown (initial state).
     Unknown,
+    /// Backend is being drained (no new requests, completing existing ones).
+    Draining,
 }
 
 /// Default maximum concurrent connections per backend.
@@ -45,6 +49,8 @@ pub struct Backend {
     last_check: RwLock<Option<Instant>>,
     /// Last successful response time.
     last_success: RwLock<Option<Instant>>,
+    /// Optional circuit breaker for this backend.
+    circuit_breaker: Option<CircuitBreaker>,
 }
 
 impl Backend {
@@ -85,6 +91,51 @@ impl Backend {
             active_requests: AtomicU64::new(0),
             last_check: RwLock::new(None),
             last_success: RwLock::new(None),
+            circuit_breaker: None,
+        }
+    }
+
+    /// Create a new backend with a circuit breaker.
+    ///
+    /// The circuit breaker will automatically open after consecutive failures
+    /// and close after successful requests in the half-open state.
+    #[allow(dead_code)]
+    pub fn with_circuit_breaker(address: String, config: CircuitBreakerConfig) -> Self {
+        Self {
+            address,
+            weight: 1,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            healthy: AtomicBool::new(true),
+            failure_count: AtomicU64::new(0),
+            success_count: AtomicU64::new(0),
+            total_requests: AtomicU64::new(0),
+            active_requests: AtomicU64::new(0),
+            last_check: RwLock::new(None),
+            last_success: RwLock::new(None),
+            circuit_breaker: Some(CircuitBreaker::new(config)),
+        }
+    }
+
+    /// Create a new backend with all options including circuit breaker.
+    #[allow(dead_code)]
+    pub fn with_all_options(
+        address: String,
+        weight: u32,
+        max_connections: u32,
+        circuit_breaker_config: Option<CircuitBreakerConfig>,
+    ) -> Self {
+        Self {
+            address,
+            weight: weight.max(1),
+            max_connections: max_connections.max(1),
+            healthy: AtomicBool::new(true),
+            failure_count: AtomicU64::new(0),
+            success_count: AtomicU64::new(0),
+            total_requests: AtomicU64::new(0),
+            active_requests: AtomicU64::new(0),
+            last_check: RwLock::new(None),
+            last_success: RwLock::new(None),
+            circuit_breaker: circuit_breaker_config.map(CircuitBreaker::new),
         }
     }
 
@@ -153,15 +204,58 @@ impl Backend {
     }
 
     /// Record a successful request.
+    ///
+    /// This updates the total request count and also notifies the circuit breaker
+    /// (if configured) about the successful request.
     pub fn record_success(&self) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         *self.last_success.write() = Some(Instant::now());
+
+        // Update circuit breaker if present
+        if let Some(ref cb) = self.circuit_breaker {
+            cb.record_success();
+        }
     }
 
     /// Record a failed request.
+    ///
+    /// This updates the total request count and also notifies the circuit breaker
+    /// (if configured) about the failed request.
     pub fn record_failure(&self) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         // Don't mark unhealthy on request failure - that's the health check's job
+
+        // Update circuit breaker if present
+        if let Some(ref cb) = self.circuit_breaker {
+            cb.record_failure();
+        }
+    }
+
+    /// Check if the backend is available for requests.
+    ///
+    /// Returns true if:
+    /// - The backend is healthy AND
+    /// - The circuit breaker allows requests (if configured)
+    ///
+    /// This combines health check status with circuit breaker state.
+    pub fn is_available(&self) -> bool {
+        // Check health first
+        if !self.is_healthy() {
+            return false;
+        }
+
+        // Check circuit breaker if present
+        if let Some(ref cb) = self.circuit_breaker {
+            return cb.is_available();
+        }
+
+        true
+    }
+
+    /// Get a reference to the circuit breaker (if configured).
+    #[allow(dead_code)]
+    pub fn circuit_breaker(&self) -> Option<&CircuitBreaker> {
+        self.circuit_breaker.as_ref()
     }
 
     /// Increment active request count.
@@ -210,6 +304,7 @@ impl Clone for Backend {
             active_requests: AtomicU64::new(self.active_requests.load(Ordering::Relaxed)),
             last_check: RwLock::new(*self.last_check.read()),
             last_success: RwLock::new(*self.last_success.read()),
+            circuit_breaker: self.circuit_breaker.clone(),
         }
     }
 }
@@ -217,6 +312,7 @@ impl Clone for Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::circuit_breaker::CircuitBreakerState;
 
     #[test]
     fn test_backend_new() {
@@ -334,5 +430,178 @@ mod tests {
         assert_eq!(cloned.max_connections(), backend.max_connections());
         assert_eq!(cloned.is_healthy(), backend.is_healthy());
         assert_eq!(cloned.active_requests(), backend.active_requests());
+    }
+
+    // ============ Circuit Breaker Integration Tests ============
+
+    #[test]
+    fn test_backend_with_circuit_breaker() {
+        use std::time::Duration;
+
+        let config = CircuitBreakerConfig::new(3, 2, Duration::from_secs(30));
+        let backend = Backend::with_circuit_breaker("127.0.0.1:3001".to_string(), config);
+
+        assert!(backend.circuit_breaker().is_some());
+        assert!(backend.is_available());
+
+        let cb = backend.circuit_breaker().unwrap();
+        assert_eq!(cb.state(), CircuitBreakerState::Closed);
+    }
+
+    #[test]
+    fn test_backend_without_circuit_breaker() {
+        let backend = Backend::new("127.0.0.1:3001".to_string());
+
+        assert!(backend.circuit_breaker().is_none());
+        assert!(backend.is_available());
+    }
+
+    #[test]
+    fn test_backend_circuit_breaker_opens_on_failures() {
+        use std::time::Duration;
+
+        // Circuit breaker opens after 3 failures
+        let config = CircuitBreakerConfig::new(3, 2, Duration::from_secs(30));
+        let backend = Backend::with_circuit_breaker("127.0.0.1:3001".to_string(), config);
+
+        assert!(backend.is_available());
+
+        // Record failures
+        backend.record_failure();
+        assert!(backend.is_available());
+
+        backend.record_failure();
+        assert!(backend.is_available());
+
+        backend.record_failure();
+        // Circuit should now be open
+        assert!(!backend.is_available());
+
+        let cb = backend.circuit_breaker().unwrap();
+        assert_eq!(cb.state(), CircuitBreakerState::Open);
+    }
+
+    #[test]
+    fn test_backend_circuit_breaker_half_open_after_timeout() {
+        use std::time::Duration;
+
+        // Very short timeout for testing
+        let config = CircuitBreakerConfig::new(1, 1, Duration::from_millis(10));
+        let backend = Backend::with_circuit_breaker("127.0.0.1:3001".to_string(), config);
+
+        // Open the circuit
+        backend.record_failure();
+        assert!(!backend.is_available());
+
+        // Wait for timeout
+        std::thread::sleep(Duration::from_millis(15));
+
+        // Should now be half-open and available
+        assert!(backend.is_available());
+
+        let cb = backend.circuit_breaker().unwrap();
+        assert_eq!(cb.state(), CircuitBreakerState::HalfOpen);
+    }
+
+    #[test]
+    fn test_backend_circuit_breaker_closes_on_success() {
+        use std::time::Duration;
+
+        // Needs 1 success in half-open to close
+        let config = CircuitBreakerConfig::new(1, 1, Duration::from_millis(10));
+        let backend = Backend::with_circuit_breaker("127.0.0.1:3001".to_string(), config);
+
+        // Open the circuit
+        backend.record_failure();
+        assert!(!backend.is_available());
+
+        // Wait for half-open
+        std::thread::sleep(Duration::from_millis(15));
+        assert!(backend.is_available());
+
+        // Record success
+        backend.record_success();
+
+        // Should be closed now
+        let cb = backend.circuit_breaker().unwrap();
+        assert_eq!(cb.state(), CircuitBreakerState::Closed);
+        assert!(backend.is_available());
+    }
+
+    #[test]
+    fn test_backend_is_available_combines_health_and_circuit_breaker() {
+        use std::time::Duration;
+
+        let config = CircuitBreakerConfig::new(1, 1, Duration::from_secs(30));
+        let backend = Backend::with_circuit_breaker("127.0.0.1:3001".to_string(), config);
+
+        // Initially healthy and circuit closed
+        assert!(backend.is_healthy());
+        assert!(backend.is_available());
+
+        // Mark unhealthy - should be unavailable
+        backend.mark_unhealthy();
+        assert!(!backend.is_healthy());
+        assert!(!backend.is_available());
+
+        // Mark healthy again - circuit still closed, should be available
+        backend.mark_healthy();
+        assert!(backend.is_healthy());
+        assert!(backend.is_available());
+
+        // Open the circuit - healthy but circuit open, should be unavailable
+        backend.record_failure();
+        assert!(backend.is_healthy());
+        assert!(!backend.is_available());
+    }
+
+    #[test]
+    fn test_backend_with_all_options_circuit_breaker() {
+        use std::time::Duration;
+
+        // With circuit breaker
+        let config = CircuitBreakerConfig::new(5, 2, Duration::from_secs(60));
+        let backend = Backend::with_all_options(
+            "127.0.0.1:3001".to_string(),
+            2,
+            50,
+            Some(config),
+        );
+
+        assert_eq!(backend.weight(), 2);
+        assert_eq!(backend.max_connections(), 50);
+        assert!(backend.circuit_breaker().is_some());
+
+        // Without circuit breaker
+        let backend = Backend::with_all_options(
+            "127.0.0.1:3001".to_string(),
+            3,
+            100,
+            None,
+        );
+
+        assert_eq!(backend.weight(), 3);
+        assert_eq!(backend.max_connections(), 100);
+        assert!(backend.circuit_breaker().is_none());
+    }
+
+    #[test]
+    fn test_backend_clone_with_circuit_breaker() {
+        use std::time::Duration;
+
+        let config = CircuitBreakerConfig::new(3, 2, Duration::from_secs(30));
+        let backend = Backend::with_circuit_breaker("127.0.0.1:3001".to_string(), config);
+
+        // Record a failure
+        backend.record_failure();
+
+        // Clone the backend
+        let cloned = backend.clone();
+
+        assert!(cloned.circuit_breaker().is_some());
+        assert_eq!(
+            cloned.circuit_breaker().unwrap().failure_count(),
+            backend.circuit_breaker().unwrap().failure_count()
+        );
     }
 }

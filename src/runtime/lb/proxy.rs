@@ -3,7 +3,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bytes::Bytes;
@@ -18,6 +18,7 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
+use super::metrics::LbMetrics;
 use super::selection::Selection;
 use super::{Backend, RoundRobin};
 
@@ -39,6 +40,8 @@ pub struct ProxyService {
     timeout: Duration,
     /// Whether to use HTTP/2 for incoming connections.
     http2_only: bool,
+    /// Metrics collector for load balancer observability.
+    metrics: LbMetrics,
 }
 
 impl ProxyService {
@@ -56,6 +59,7 @@ impl ProxyService {
             client,
             timeout,
             http2_only: false,
+            metrics: LbMetrics::new(),
         }
     }
 
@@ -73,6 +77,7 @@ impl ProxyService {
             client,
             timeout,
             http2_only,
+            metrics: LbMetrics::new(),
         }
     }
 
@@ -153,8 +158,15 @@ impl ProxyService {
             }
         };
 
+        // Track request timing
+        let start = Instant::now();
+        let backend_addr = backend.address().to_string();
+
         // Track request
         backend.start_request();
+
+        // Update active connections metric
+        self.metrics.set_active_connections(&backend_addr, backend.active_requests());
 
         // Forward the request
         let result = self.forward_request(req, &backend).await;
@@ -162,21 +174,33 @@ impl ProxyService {
         // End request tracking
         backend.end_request();
 
+        // Update active connections metric after request ends
+        self.metrics.set_active_connections(&backend_addr, backend.active_requests());
+
+        // Calculate request duration
+        let duration = start.elapsed().as_secs_f64();
+
         match result {
             Ok(response) => {
                 backend.record_success();
+                // Record successful request metrics
+                self.metrics.record_success(&backend_addr, duration);
                 debug!(
                     backend = %backend.address(),
                     status = %response.status(),
+                    duration_ms = %(duration * 1000.0),
                     "Request completed"
                 );
                 Ok(response)
             },
             Err(e) => {
                 backend.record_failure();
+                // Record failed request metrics
+                self.metrics.record_failure(&backend_addr, duration);
                 error!(
                     backend = %backend.address(),
                     error = %e,
+                    duration_ms = %(duration * 1000.0),
                     "Request failed"
                 );
                 Ok(Response::builder()
@@ -187,40 +211,46 @@ impl ProxyService {
         }
     }
 
-    /// Select a healthy backend with available capacity using the load balancing algorithm.
+    /// Select an available backend with capacity using the load balancing algorithm.
+    ///
+    /// A backend is considered available if:
+    /// - It is healthy (health checks are passing)
+    /// - Its circuit breaker allows requests (if configured)
+    /// - It has capacity for more connections
     ///
     /// Returns `SelectBackendResult::Selected` if a backend is available,
-    /// `SelectBackendResult::NoHealthyBackends` if no backends are healthy,
-    /// or `SelectBackendResult::AllAtCapacity` if all healthy backends are at their connection limit.
+    /// `SelectBackendResult::NoHealthyBackends` if no backends are available (unhealthy or circuit open),
+    /// or `SelectBackendResult::AllAtCapacity` if all available backends are at their connection limit.
     async fn select_backend(&self) -> SelectBackendResult {
         let backends = self.backends.read().await;
         let selection = self.selection.read().await;
 
-        // Get indices of healthy backends
-        let healthy_indices: Vec<usize> = backends
+        // Get indices of available backends (healthy + circuit breaker allows)
+        // The is_available() method checks both health status and circuit breaker state
+        let available_indices: Vec<usize> = backends
             .iter()
             .enumerate()
-            .filter(|(_, b)| b.is_healthy())
+            .filter(|(_, b)| b.is_available())
             .map(|(i, _)| i)
             .collect();
 
-        if healthy_indices.is_empty() {
+        if available_indices.is_empty() {
             return SelectBackendResult::NoHealthyBackends;
         }
 
-        // Get indices of healthy backends with available capacity
-        let available_indices: Vec<usize> = healthy_indices
+        // Get indices of available backends with connection capacity
+        let capacity_indices: Vec<usize> = available_indices
             .iter()
             .copied()
             .filter(|&i| backends[i].has_capacity())
             .collect();
 
-        if available_indices.is_empty() {
+        if capacity_indices.is_empty() {
             return SelectBackendResult::AllAtCapacity;
         }
 
-        // Select using the algorithm from available backends
-        match selection.select(&available_indices) {
+        // Select using the algorithm from backends with capacity
+        match selection.select(&capacity_indices) {
             Some(idx) => SelectBackendResult::Selected(backends[idx].clone()),
             None => SelectBackendResult::AllAtCapacity,
         }

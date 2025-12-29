@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
+use super::metrics::LbMetrics;
 use super::Backend;
 
 /// Type of health check to perform.
@@ -207,6 +208,7 @@ impl HealthCheck {
 /// Run continuous health checks for all backends.
 pub(super) async fn run_health_checks(backends: Arc<RwLock<Vec<Backend>>>, config: HealthCheckConfig) {
     let health_check = HealthCheck::new(config.clone());
+    let metrics = LbMetrics::new();
     let mut interval = tokio::time::interval(config.interval);
 
     match &config.check_type {
@@ -276,6 +278,13 @@ pub(super) async fn run_health_checks(backends: Arc<RwLock<Vec<Backend>>>, confi
                 }
             }
         }
+
+        // Update backend health metrics after each health check cycle
+        metrics.update_backend_metrics(
+            backends_snapshot.iter().map(|b| {
+                (b.address(), b.is_healthy(), b.active_requests())
+            })
+        );
     }
 }
 
