@@ -24,6 +24,8 @@ pub struct Manifest {
     #[serde(default)]
     pub composition: CompositionConfig,
     #[serde(default)]
+    pub lb: Option<LbConfig>,
+    #[serde(default)]
     pub dependencies: BTreeMap<String, Dependency>,
     #[serde(default, rename = "dev-dependencies")]
     pub dev_dependencies: BTreeMap<String, Dependency>,
@@ -205,6 +207,149 @@ impl Default for CompositionConfig {
         Self {
             http_handler: default_http_handler(),
             bridge: None,
+        }
+    }
+}
+
+/// Load balancer configuration.
+///
+/// Controls the L7 load balancer that distributes requests across multiple backend workers.
+///
+/// # Example
+///
+/// ```toml
+/// [lb]
+/// enabled = true
+/// algorithm = "round_robin"
+/// health_check_type = "http"  # or "tcp"
+/// health_check_interval_ms = 5000
+/// health_check_timeout_ms = 2000
+/// health_check_path = "/health"  # only used when health_check_type = "http"
+/// unhealthy_threshold = 3
+/// healthy_threshold = 2
+/// request_timeout_secs = 30
+/// max_connections_per_backend = 100
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LbConfig {
+    /// Enable load balancing (default: false).
+    #[serde(default = "default_lb_enabled")]
+    pub enabled: bool,
+    /// Load balancing algorithm (default: "round_robin").
+    ///
+    /// Options: "round_robin", "weighted", "consistent_hash"
+    #[serde(default = "default_lb_algorithm")]
+    pub algorithm: String,
+    /// Type of health check to perform (default: "http").
+    ///
+    /// Options:
+    /// - "http" - HTTP GET request to health_check_path, expects 2xx response
+    /// - "tcp" - TCP connection check, just verifies port is accepting connections
+    #[serde(default = "default_health_check_type")]
+    pub health_check_type: String,
+    /// Interval between health checks in milliseconds (default: 5000).
+    #[serde(default = "default_health_check_interval_ms")]
+    pub health_check_interval_ms: u64,
+    /// Timeout for each health check request in milliseconds (default: 2000).
+    #[serde(default = "default_health_check_timeout_ms")]
+    pub health_check_timeout_ms: u64,
+    /// Path to check for HTTP health checks (default: "/health").
+    /// Only used when health_check_type = "http".
+    #[serde(default = "default_health_check_path")]
+    pub health_check_path: String,
+    /// Number of consecutive failures before marking backend unhealthy (default: 3).
+    #[serde(default = "default_unhealthy_threshold")]
+    pub unhealthy_threshold: u32,
+    /// Number of consecutive successes before marking backend healthy (default: 2).
+    #[serde(default = "default_healthy_threshold")]
+    pub healthy_threshold: u32,
+    /// Request timeout in seconds (default: 30).
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    /// Maximum concurrent connections per backend (default: 100).
+    #[serde(default = "default_max_connections_per_backend")]
+    pub max_connections_per_backend: usize,
+    /// Pool idle timeout in seconds (default: 90).
+    /// Connections idle longer than this are closed.
+    #[serde(default = "default_pool_idle_timeout_secs")]
+    pub pool_idle_timeout_secs: u64,
+    /// TCP keepalive interval in seconds (default: 60).
+    #[serde(default = "default_tcp_keepalive_secs")]
+    pub tcp_keepalive_secs: u64,
+    /// Use HTTP/2 only (with prior knowledge) for backend connections (default: false).
+    /// Enable this when all backends support HTTP/2 for better performance.
+    #[serde(default = "default_http2_only")]
+    pub http2_only: bool,
+}
+
+fn default_lb_enabled() -> bool {
+    false
+}
+
+fn default_lb_algorithm() -> String {
+    "round_robin".to_string()
+}
+
+fn default_health_check_type() -> String {
+    "http".to_string()
+}
+
+fn default_health_check_interval_ms() -> u64 {
+    5000
+}
+
+fn default_health_check_timeout_ms() -> u64 {
+    2000
+}
+
+fn default_health_check_path() -> String {
+    "/health".to_string()
+}
+
+fn default_unhealthy_threshold() -> u32 {
+    3
+}
+
+fn default_healthy_threshold() -> u32 {
+    2
+}
+
+fn default_request_timeout_secs() -> u64 {
+    30
+}
+
+fn default_max_connections_per_backend() -> usize {
+    100
+}
+
+fn default_pool_idle_timeout_secs() -> u64 {
+    90
+}
+
+fn default_tcp_keepalive_secs() -> u64 {
+    60
+}
+
+fn default_http2_only() -> bool {
+    false
+}
+
+impl Default for LbConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_lb_enabled(),
+            algorithm: default_lb_algorithm(),
+            health_check_type: default_health_check_type(),
+            health_check_interval_ms: default_health_check_interval_ms(),
+            health_check_timeout_ms: default_health_check_timeout_ms(),
+            health_check_path: default_health_check_path(),
+            unhealthy_threshold: default_unhealthy_threshold(),
+            healthy_threshold: default_healthy_threshold(),
+            request_timeout_secs: default_request_timeout_secs(),
+            max_connections_per_backend: default_max_connections_per_backend(),
+            pool_idle_timeout_secs: default_pool_idle_timeout_secs(),
+            tcp_keepalive_secs: default_tcp_keepalive_secs(),
+            http2_only: default_http2_only(),
         }
     }
 }
@@ -907,6 +1052,7 @@ impl Default for Manifest {
             server: ServerConfig::default(),
             tracing: TracingConfig::default(),
             composition: CompositionConfig::default(),
+            lb: None,
             dependencies: BTreeMap::new(),
             dev_dependencies: BTreeMap::new(),
         }
@@ -1569,5 +1715,93 @@ version = "invalid"
         };
         assert!(config.is_host_allowed("api.example.com"));
         assert!(!config.is_host_allowed("other.example.com"));
+    }
+
+    #[test]
+    fn test_lb_config_defaults() {
+        let config = LbConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.algorithm, "round_robin");
+        assert_eq!(config.health_check_type, "http");
+        assert_eq!(config.health_check_interval_ms, 5000);
+        assert_eq!(config.health_check_timeout_ms, 2000);
+        assert_eq!(config.health_check_path, "/health");
+        assert_eq!(config.unhealthy_threshold, 3);
+        assert_eq!(config.healthy_threshold, 2);
+        assert_eq!(config.request_timeout_secs, 30);
+        assert_eq!(config.max_connections_per_backend, 100);
+        assert_eq!(config.pool_idle_timeout_secs, 90);
+        assert_eq!(config.tcp_keepalive_secs, 60);
+        assert!(!config.http2_only);
+    }
+
+    #[test]
+    fn test_parse_lb_config() {
+        let toml = r#"
+[project]
+name = "my-app"
+version = "0.1.0"
+
+[lb]
+enabled = true
+algorithm = "weighted"
+health_check_interval_ms = 10000
+health_check_timeout_ms = 3000
+health_check_path = "/healthz"
+unhealthy_threshold = 5
+healthy_threshold = 3
+request_timeout_secs = 60
+max_connections_per_backend = 200
+"#;
+        let manifest: Manifest = toml::from_str(toml).unwrap();
+        let lb = manifest.lb.expect("lb config should be present");
+        assert!(lb.enabled);
+        assert_eq!(lb.algorithm, "weighted");
+        assert_eq!(lb.health_check_interval_ms, 10000);
+        assert_eq!(lb.health_check_timeout_ms, 3000);
+        assert_eq!(lb.health_check_path, "/healthz");
+        assert_eq!(lb.unhealthy_threshold, 5);
+        assert_eq!(lb.healthy_threshold, 3);
+        assert_eq!(lb.request_timeout_secs, 60);
+        assert_eq!(lb.max_connections_per_backend, 200);
+    }
+
+    #[test]
+    fn test_parse_lb_config_partial() {
+        // Test that defaults are applied for missing fields
+        let toml = r#"
+[project]
+name = "my-app"
+version = "0.1.0"
+
+[lb]
+enabled = true
+algorithm = "consistent_hash"
+"#;
+        let manifest: Manifest = toml::from_str(toml).unwrap();
+        let lb = manifest.lb.expect("lb config should be present");
+        assert!(lb.enabled);
+        assert_eq!(lb.algorithm, "consistent_hash");
+        // Check defaults are applied
+        assert_eq!(lb.health_check_type, "http");
+        assert_eq!(lb.health_check_interval_ms, 5000);
+        assert_eq!(lb.health_check_timeout_ms, 2000);
+        assert_eq!(lb.health_check_path, "/health");
+        assert_eq!(lb.unhealthy_threshold, 3);
+        assert_eq!(lb.healthy_threshold, 2);
+        assert_eq!(lb.request_timeout_secs, 30);
+        assert_eq!(lb.max_connections_per_backend, 100);
+    }
+
+    #[test]
+    fn test_parse_manifest_without_lb() {
+        // Test that lb is None when not specified
+        let toml = r#"
+[project]
+name = "my-app"
+version = "0.1.0"
+"#;
+        let manifest: Manifest = toml::from_str(toml).unwrap();
+        assert!(manifest.lb.is_none());
     }
 }

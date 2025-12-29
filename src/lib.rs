@@ -141,3 +141,9 @@ pub mod constants;
 /// assert_eq!(config.port, 3000);
 /// ```
 pub mod config;
+
+/// Manifest types for mik.toml configuration.
+///
+/// This module provides types for parsing and representing
+/// the mik.toml manifest file, including load balancer configuration.
+pub mod manifest;

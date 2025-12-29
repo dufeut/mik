@@ -4,6 +4,7 @@
 //! requests across multiple backend workers. It supports:
 //!
 //! - Round-robin load balancing
+//! - Weighted round-robin load balancing (proportional traffic distribution)
 //! - Health checks with automatic failover
 //! - Connection pooling via reqwest
 //! - Graceful shutdown with request draining
@@ -35,10 +36,10 @@ mod health;
 mod proxy;
 mod selection;
 
-pub use backend::{Backend, BackendState};
-pub use health::{HealthCheck, HealthCheckConfig};
+pub use backend::Backend;
+pub use health::{HealthCheckConfig, HealthCheckType};
 pub use proxy::ProxyService;
-pub use selection::{RoundRobin, Selection};
+pub use selection::RoundRobin;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -47,6 +48,8 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::RwLock;
 use tracing::info;
+
+use crate::manifest::LbConfig;
 
 /// Configuration for the load balancer.
 #[derive(Debug, Clone)]
@@ -61,6 +64,13 @@ pub struct LoadBalancerConfig {
     pub request_timeout: Duration,
     /// Maximum concurrent requests per backend.
     pub max_connections_per_backend: usize,
+    /// Pool idle timeout in seconds (connections idle longer than this are closed).
+    pub pool_idle_timeout_secs: u64,
+    /// TCP keepalive interval in seconds.
+    pub tcp_keepalive_secs: u64,
+    /// Use HTTP/2 only (with prior knowledge) for backend connections.
+    /// Enable this when all backends support HTTP/2 for better performance.
+    pub http2_only: bool,
 }
 
 impl Default for LoadBalancerConfig {
@@ -71,6 +81,69 @@ impl Default for LoadBalancerConfig {
             health_check: HealthCheckConfig::default(),
             request_timeout: Duration::from_secs(30),
             max_connections_per_backend: 100,
+            pool_idle_timeout_secs: 90,
+            tcp_keepalive_secs: 60,
+            http2_only: false,
+        }
+    }
+}
+
+impl LoadBalancerConfig {
+    /// Create a `LoadBalancerConfig` from a manifest `LbConfig`.
+    ///
+    /// This converts the manifest configuration (which uses simpler types like
+    /// milliseconds as u64) into the runtime configuration (which uses Duration).
+    ///
+    /// # Arguments
+    ///
+    /// * `lb_config` - The load balancer configuration from mik.toml
+    /// * `listen_addr` - The address to listen on (typically from server config)
+    /// * `backends` - List of backend addresses to load balance across
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use mik::manifest::LbConfig;
+    /// use mik::runtime::lb::LoadBalancerConfig;
+    ///
+    /// let lb_config = LbConfig::default();
+    /// let config = LoadBalancerConfig::from_manifest(
+    ///     &lb_config,
+    ///     "0.0.0.0:3000".parse().unwrap(),
+    ///     vec!["127.0.0.1:3001".to_string()],
+    /// );
+    /// ```
+    #[allow(dead_code)]
+    pub fn from_manifest(
+        lb_config: &LbConfig,
+        listen_addr: SocketAddr,
+        backends: Vec<String>,
+    ) -> Self {
+        // Determine health check type from manifest configuration
+        let check_type = match lb_config.health_check_type.to_lowercase().as_str() {
+            "tcp" => HealthCheckType::Tcp,
+            _ => HealthCheckType::Http {
+                path: lb_config.health_check_path.clone(),
+            },
+        };
+
+        let health_check = HealthCheckConfig {
+            interval: Duration::from_millis(lb_config.health_check_interval_ms),
+            timeout: Duration::from_millis(lb_config.health_check_timeout_ms),
+            check_type,
+            unhealthy_threshold: lb_config.unhealthy_threshold,
+            healthy_threshold: lb_config.healthy_threshold,
+        };
+
+        Self {
+            listen_addr,
+            backends,
+            health_check,
+            request_timeout: Duration::from_secs(lb_config.request_timeout_secs),
+            max_connections_per_backend: lb_config.max_connections_per_backend,
+            pool_idle_timeout_secs: lb_config.pool_idle_timeout_secs,
+            tcp_keepalive_secs: lb_config.tcp_keepalive_secs,
+            http2_only: lb_config.http2_only,
         }
     }
 }
@@ -97,11 +170,20 @@ impl LoadBalancer {
 
         let selection = RoundRobin::new(backends.len());
 
-        // Create HTTP client with connection pooling
-        let client = reqwest::Client::builder()
+        // Create HTTP client with connection pooling and HTTP/2 support
+        let mut client_builder = reqwest::Client::builder()
             .timeout(config.request_timeout)
             .pool_max_idle_per_host(config.max_connections_per_backend)
-            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_idle_timeout(Duration::from_secs(config.pool_idle_timeout_secs))
+            .tcp_keepalive(Duration::from_secs(config.tcp_keepalive_secs));
+
+        // Enable HTTP/2 with prior knowledge for local backends
+        // This provides better performance through multiplexing when backends support HTTP/2
+        if config.http2_only {
+            client_builder = client_builder.http2_prior_knowledge();
+        }
+
+        let client = client_builder
             .build()
             .expect("Failed to create HTTP client");
 
@@ -114,6 +196,7 @@ impl LoadBalancer {
     }
 
     /// Create a load balancer from a list of backend addresses.
+    #[allow(dead_code)]
     pub fn from_backends(listen_addr: SocketAddr, backends: Vec<String>) -> Self {
         let config = LoadBalancerConfig {
             listen_addr,
@@ -151,23 +234,26 @@ impl LoadBalancer {
         }
 
         // Create and run the proxy service
-        let proxy = ProxyService::new(
+        let proxy = ProxyService::with_http2(
             backends,
             self.selection,
             self.client,
             self.config.request_timeout,
+            self.config.http2_only,
         );
 
         proxy.serve(addr).await
     }
 
     /// Get the number of healthy backends.
+    #[allow(dead_code)]
     pub async fn healthy_count(&self) -> usize {
         let backends = self.backends.read().await;
         backends.iter().filter(|b| b.is_healthy()).count()
     }
 
     /// Get the total number of backends.
+    #[allow(dead_code)]
     pub async fn total_count(&self) -> usize {
         self.backends.read().await.len()
     }
@@ -193,5 +279,128 @@ mod tests {
         );
         assert_eq!(lb.config.listen_addr, "127.0.0.1:8080".parse().unwrap());
         assert_eq!(lb.config.backends.len(), 2);
+    }
+
+    #[test]
+    fn test_load_balancer_config_from_manifest() {
+        let lb_config = LbConfig {
+            enabled: true,
+            algorithm: "weighted".to_string(),
+            health_check_type: "http".to_string(),
+            health_check_interval_ms: 10000,
+            health_check_timeout_ms: 3000,
+            health_check_path: "/healthz".to_string(),
+            unhealthy_threshold: 5,
+            healthy_threshold: 3,
+            request_timeout_secs: 60,
+            max_connections_per_backend: 200,
+            pool_idle_timeout_secs: 120,
+            tcp_keepalive_secs: 30,
+            http2_only: true,
+        };
+
+        let config = LoadBalancerConfig::from_manifest(
+            &lb_config,
+            "0.0.0.0:8080".parse().unwrap(),
+            vec!["127.0.0.1:3001".to_string(), "127.0.0.1:3002".to_string()],
+        );
+
+        assert_eq!(config.listen_addr, "0.0.0.0:8080".parse().unwrap());
+        assert_eq!(config.backends.len(), 2);
+        assert_eq!(config.request_timeout, Duration::from_secs(60));
+        assert_eq!(config.max_connections_per_backend, 200);
+        assert_eq!(config.pool_idle_timeout_secs, 120);
+        assert_eq!(config.tcp_keepalive_secs, 30);
+        assert!(config.http2_only);
+
+        // Check health check config
+        assert_eq!(config.health_check.interval, Duration::from_millis(10000));
+        assert_eq!(config.health_check.timeout, Duration::from_millis(3000));
+        assert_eq!(config.health_check.path(), "/healthz");
+        assert_eq!(config.health_check.unhealthy_threshold, 5);
+        assert_eq!(config.health_check.healthy_threshold, 3);
+    }
+
+    #[test]
+    fn test_load_balancer_config_from_manifest_defaults() {
+        let lb_config = LbConfig::default();
+
+        let config = LoadBalancerConfig::from_manifest(
+            &lb_config,
+            "0.0.0.0:3000".parse().unwrap(),
+            vec![],
+        );
+
+        assert_eq!(config.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.max_connections_per_backend, 100);
+        assert_eq!(config.pool_idle_timeout_secs, 90);
+        assert_eq!(config.tcp_keepalive_secs, 60);
+        assert!(!config.http2_only);
+        assert_eq!(config.health_check.interval, Duration::from_millis(5000));
+        assert_eq!(config.health_check.timeout, Duration::from_millis(2000));
+        assert_eq!(config.health_check.path(), "/health");
+        assert_eq!(config.health_check.unhealthy_threshold, 3);
+        assert_eq!(config.health_check.healthy_threshold, 2);
+        // Default should be HTTP health check
+        assert_eq!(
+            config.health_check.check_type,
+            HealthCheckType::Http {
+                path: "/health".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_load_balancer_config_from_manifest_tcp_health_check() {
+        let lb_config = LbConfig {
+            enabled: true,
+            algorithm: "round_robin".to_string(),
+            health_check_type: "tcp".to_string(),
+            health_check_interval_ms: 5000,
+            health_check_timeout_ms: 2000,
+            health_check_path: "/health".to_string(), // Should be ignored for TCP
+            unhealthy_threshold: 3,
+            healthy_threshold: 2,
+            request_timeout_secs: 30,
+            max_connections_per_backend: 100,
+            pool_idle_timeout_secs: 90,
+            tcp_keepalive_secs: 60,
+            http2_only: false,
+        };
+
+        let config = LoadBalancerConfig::from_manifest(
+            &lb_config,
+            "0.0.0.0:3000".parse().unwrap(),
+            vec!["127.0.0.1:3001".to_string()],
+        );
+
+        // TCP health check should be selected
+        assert_eq!(config.health_check.check_type, HealthCheckType::Tcp);
+        // path() should return empty string for TCP
+        assert_eq!(config.health_check.path(), "");
+    }
+
+    #[test]
+    fn test_load_balancer_config_from_manifest_tcp_case_insensitive() {
+        // Test that "TCP", "Tcp", "tcp" all work
+        for health_check_type in ["TCP", "Tcp", "tcp", "  TCP  "] {
+            let lb_config = LbConfig {
+                health_check_type: health_check_type.trim().to_string(),
+                ..LbConfig::default()
+            };
+
+            let config = LoadBalancerConfig::from_manifest(
+                &lb_config,
+                "0.0.0.0:3000".parse().unwrap(),
+                vec![],
+            );
+
+            assert_eq!(
+                config.health_check.check_type,
+                HealthCheckType::Tcp,
+                "Failed for health_check_type: {}",
+                health_check_type
+            );
+        }
     }
 }

@@ -9,7 +9,8 @@ use anyhow::Result;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::server::conn::http1;
+use hyper::server::conn::{http1, http2};
+use hyper_util::rt::TokioExecutor;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -20,16 +21,29 @@ use tracing::{debug, error, info, warn};
 use super::selection::Selection;
 use super::{Backend, RoundRobin};
 
+/// Result of backend selection.
+enum SelectBackendResult {
+    /// A backend was successfully selected.
+    Selected(Backend),
+    /// No healthy backends are available.
+    NoHealthyBackends,
+    /// All healthy backends are at connection capacity.
+    AllAtCapacity,
+}
+
 /// HTTP proxy service that forwards requests to backend servers.
 pub struct ProxyService {
     backends: Arc<RwLock<Vec<Backend>>>,
     selection: Arc<RwLock<RoundRobin>>,
     client: reqwest::Client,
     timeout: Duration,
+    /// Whether to use HTTP/2 for incoming connections.
+    http2_only: bool,
 }
 
 impl ProxyService {
     /// Create a new proxy service.
+    #[allow(dead_code)]
     pub fn new(
         backends: Arc<RwLock<Vec<Backend>>>,
         selection: Arc<RwLock<RoundRobin>>,
@@ -41,13 +55,32 @@ impl ProxyService {
             selection,
             client,
             timeout,
+            http2_only: false,
+        }
+    }
+
+    /// Create a new proxy service with HTTP/2 support.
+    pub fn with_http2(
+        backends: Arc<RwLock<Vec<Backend>>>,
+        selection: Arc<RwLock<RoundRobin>>,
+        client: reqwest::Client,
+        timeout: Duration,
+        http2_only: bool,
+    ) -> Self {
+        Self {
+            backends,
+            selection,
+            client,
+            timeout,
+            http2_only,
         }
     }
 
     /// Start serving on the given address.
     pub async fn serve(self, addr: SocketAddr) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
-        info!("Proxy service listening on http://{}", addr);
+        let protocol = if self.http2_only { "h2" } else { "http/1.1" };
+        info!("Proxy service listening on http://{} ({})", addr, protocol);
 
         let proxy = Arc::new(self);
 
@@ -55,6 +88,7 @@ impl ProxyService {
             let (stream, remote_addr) = listener.accept().await?;
             let io = TokioIo::new(stream);
             let proxy = proxy.clone();
+            let http2_only = proxy.http2_only;
 
             tokio::spawn(async move {
                 let service = service_fn(move |req| {
@@ -62,7 +96,19 @@ impl ProxyService {
                     async move { proxy.handle_request(req, remote_addr).await }
                 });
 
-                if let Err(e) = http1::Builder::new().serve_connection(io, service).await
+                let result = if http2_only {
+                    // Use HTTP/2 with prior knowledge (no TLS/ALPN negotiation)
+                    http2::Builder::new(TokioExecutor::new())
+                        .serve_connection(io, service)
+                        .await
+                } else {
+                    // Use HTTP/1.1
+                    http1::Builder::new()
+                        .serve_connection(io, service)
+                        .await
+                };
+
+                if let Err(e) = result
                     && !e.to_string().contains("connection closed")
                 {
                     error!("Connection error: {}", e);
@@ -88,13 +134,23 @@ impl ProxyService {
             "Received request"
         );
 
-        // Select a healthy backend
-        let Some(backend) = self.select_backend().await else {
-            warn!("No healthy backends available");
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .body(Full::new(Bytes::from("No healthy backends available")))
-                .unwrap());
+        // Select a healthy backend with available capacity
+        let backend = match self.select_backend().await {
+            SelectBackendResult::Selected(backend) => backend,
+            SelectBackendResult::NoHealthyBackends => {
+                warn!("No healthy backends available");
+                return Ok(Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Full::new(Bytes::from("No healthy backends available")))
+                    .unwrap());
+            }
+            SelectBackendResult::AllAtCapacity => {
+                warn!("All backends at connection capacity");
+                return Ok(Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Full::new(Bytes::from("All backends at connection capacity")))
+                    .unwrap());
+            }
         };
 
         // Track request
@@ -131,8 +187,12 @@ impl ProxyService {
         }
     }
 
-    /// Select a healthy backend using the load balancing algorithm.
-    async fn select_backend(&self) -> Option<Backend> {
+    /// Select a healthy backend with available capacity using the load balancing algorithm.
+    ///
+    /// Returns `SelectBackendResult::Selected` if a backend is available,
+    /// `SelectBackendResult::NoHealthyBackends` if no backends are healthy,
+    /// or `SelectBackendResult::AllAtCapacity` if all healthy backends are at their connection limit.
+    async fn select_backend(&self) -> SelectBackendResult {
         let backends = self.backends.read().await;
         let selection = self.selection.read().await;
 
@@ -144,10 +204,26 @@ impl ProxyService {
             .map(|(i, _)| i)
             .collect();
 
-        // Select using the algorithm
-        selection
-            .select(&healthy_indices)
-            .map(|idx| backends[idx].clone())
+        if healthy_indices.is_empty() {
+            return SelectBackendResult::NoHealthyBackends;
+        }
+
+        // Get indices of healthy backends with available capacity
+        let available_indices: Vec<usize> = healthy_indices
+            .iter()
+            .copied()
+            .filter(|&i| backends[i].has_capacity())
+            .collect();
+
+        if available_indices.is_empty() {
+            return SelectBackendResult::AllAtCapacity;
+        }
+
+        // Select using the algorithm from available backends
+        match selection.select(&available_indices) {
+            Some(idx) => SelectBackendResult::Selected(backends[idx].clone()),
+            None => SelectBackendResult::AllAtCapacity,
+        }
     }
 
     /// Forward a request to the selected backend.
