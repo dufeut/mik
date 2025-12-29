@@ -7,6 +7,7 @@
 
 pub mod aot_cache;
 pub mod error;
+pub mod lb;
 pub mod reliability;
 pub mod script;
 pub mod security;

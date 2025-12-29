@@ -5,8 +5,11 @@
 //! - **Single component mode**: `mik run path/to/component.wasm` - serves a single component
 //!
 //! Multi-worker mode (for use with external L7 load balancer):
-//! - `mik run --workers 4` - spawns 4 worker processes on ports 3000-3003
+//! - `mik run --workers 4` - spawns 4 worker processes on ports 3001-3004
 //! - `mik run --workers 0` - auto-detect workers (one per CPU core)
+//!
+//! Integrated L7 load balancer mode:
+//! - `mik run --workers 4 --lb` - LB on port 3000, workers on 3001-3004
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
@@ -15,6 +18,7 @@ use std::process::{Child, Command};
 
 use crate::manifest::TracingConfig;
 use crate::runtime::HostBuilder;
+use crate::runtime::lb::{LoadBalancer, LoadBalancerConfig};
 
 /// Run components with the embedded runtime.
 ///
@@ -29,9 +33,13 @@ use crate::runtime::HostBuilder;
 /// - `mik run path/to/component.wasm` - Single component mode
 ///   - Routes: `/run/<name>/*` -> the component (name derived from filename)
 ///
-/// - `mik run --workers 4` - Multi-worker mode
+/// - `mik run --workers 4` - Multi-worker mode (external LB)
 ///   - Spawns 4 worker processes on consecutive ports
 ///   - Use with nginx/caddy/haproxy for L7 load balancing
+///
+/// - `mik run --workers 4 --lb` - Multi-worker mode (integrated LB)
+///   - LB on base_port, workers on base_port+1 to base_port+workers
+///   - Round-robin with health checks
 ///
 /// - `mik run --workers 0` - Auto-detect workers (one per CPU core)
 pub async fn execute(
@@ -39,6 +47,7 @@ pub async fn execute(
     workers: u16,
     port_override: Option<u16>,
     local_only: bool,
+    use_lb: bool,
 ) -> Result<()> {
     // Set MIK_LOCAL env var if --local flag is set
     if local_only {
@@ -63,7 +72,12 @@ pub async fn execute(
         workers
     };
 
-    // Multi-worker mode: spawn child processes
+    // Multi-worker mode with integrated load balancer
+    if workers > 1 && use_lb {
+        return run_with_lb(component_path, workers, port_override, local_only).await;
+    }
+
+    // Multi-worker mode: spawn child processes (for external LB)
     if workers > 1 {
         return run_multi_worker(component_path, workers, port_override, local_only).await;
     }
@@ -169,6 +183,136 @@ async fn run_multi_worker(
 
     println!("\nShutting down {} workers...", children.len());
 
+    for mut child in children {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    println!("All workers stopped.");
+    Ok(())
+}
+
+/// Run with integrated L7 load balancer.
+///
+/// Spawns worker processes and starts an integrated load balancer that
+/// distributes requests using round-robin with health checks.
+async fn run_with_lb(
+    component_path: Option<&str>,
+    workers: u16,
+    port_override: Option<u16>,
+    local_only: bool,
+) -> Result<()> {
+    // Get base port from override, mik.toml, or default
+    let base_port = port_override.unwrap_or_else(|| {
+        if Path::new("mik.toml").exists()
+            && let Ok(content) = std::fs::read_to_string("mik.toml")
+        {
+            #[derive(serde::Deserialize, Default)]
+            struct PartialManifest {
+                #[serde(default)]
+                server: ServerConfig,
+            }
+            #[derive(serde::Deserialize, Default)]
+            struct ServerConfig {
+                #[serde(default = "default_port")]
+                port: u16,
+            }
+            fn default_port() -> u16 {
+                3000
+            }
+
+            if let Ok(manifest) = toml::from_str::<PartialManifest>(&content) {
+                return manifest.server.port;
+            }
+        }
+        3000
+    });
+
+    println!(
+        "Starting {} workers with integrated L7 load balancer...\n",
+        workers
+    );
+
+    // Get current executable path
+    let exe = std::env::current_exe().context("Failed to get current executable")?;
+
+    // Spawn worker processes on ports base_port+1 to base_port+workers
+    let mut children: Vec<Child> = Vec::new();
+    let mut backend_addrs: Vec<String> = Vec::new();
+
+    let bind_addr = if local_only { "127.0.0.1" } else { "0.0.0.0" };
+
+    for i in 0..workers {
+        let worker_port = base_port + 1 + i;
+        backend_addrs.push(format!("127.0.0.1:{worker_port}"));
+
+        let mut cmd = Command::new(&exe);
+        cmd.arg("run");
+
+        if let Some(path) = component_path {
+            cmd.arg(path);
+        }
+
+        cmd.arg("--port").arg(worker_port.to_string());
+        cmd.env("MIK_WORKER_ID", i.to_string());
+        if local_only {
+            cmd.env("MIK_LOCAL", "1");
+        }
+
+        // Suppress worker stdout to avoid interleaving
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::inherit());
+
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("Failed to spawn worker {i}"))?;
+        println!(
+            "  Worker {i}: http://127.0.0.1:{worker_port} (pid: {})",
+            child.id()
+        );
+        children.push(child);
+    }
+
+    // Give workers time to start
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Configure and start the load balancer
+    let lb_addr: SocketAddr = format!("{bind_addr}:{base_port}")
+        .parse()
+        .context("Invalid LB address")?;
+
+    println!("\n─────────────────────────────────────");
+    println!("L7 Load Balancer: http://{lb_addr}");
+    println!("─────────────────────────────────────");
+    println!("  Algorithm: round-robin");
+    println!("  Health check: /health (5s interval)");
+    println!("  Backends: {}", backend_addrs.join(", "));
+    println!("─────────────────────────────────────\n");
+    println!("Press Ctrl+C to stop\n");
+
+    // Create load balancer config
+    let lb_config = LoadBalancerConfig {
+        listen_addr: lb_addr,
+        backends: backend_addrs,
+        ..Default::default()
+    };
+
+    let lb = LoadBalancer::new(lb_config);
+
+    // Run load balancer with Ctrl+C handling
+    tokio::select! {
+        result = lb.serve() => {
+            if let Err(e) = result {
+                eprintln!("Load balancer error: {e}");
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            println!("\nShutting down...");
+        }
+    }
+
+    // Kill all workers
+    println!("Stopping {} workers...", children.len());
     for mut child in children {
         let _ = child.kill();
         let _ = child.wait();

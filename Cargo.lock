@@ -2475,6 +2475,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-compression",
+ "async-trait",
  "axum 0.8.8",
  "axum-test-helper",
  "backon",
@@ -2492,6 +2493,7 @@ dependencies = [
  "hex",
  "http-body-util",
  "hyper 1.8.1",
+ "hyper-timeout",
  "hyper-util",
  "indicatif",
  "metrics",

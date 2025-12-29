@@ -279,13 +279,13 @@ enum Commands {
 
         /// Number of worker processes for horizontal scaling.
         /// Use 0 for auto-detect (one worker per CPU core).
-        /// Each worker runs on a separate port (base_port, base_port+1, ...).
-        /// Use with nginx/caddy/haproxy for L7 load balancing.
+        /// Each worker runs on a separate port (base_port+1, base_port+2, ...).
+        /// Use with --lb for integrated load balancer or nginx/caddy/haproxy.
         #[arg(short, long, default_value = "1")]
         workers: u16,
 
-        /// Base port for workers (default: from mik.toml or 3000).
-        /// Worker N listens on port + N.
+        /// Base port for the load balancer (default: from mik.toml or 3000).
+        /// Workers run on ports base_port+1, base_port+2, etc.
         #[arg(short, long)]
         port: Option<u16>,
 
@@ -293,6 +293,12 @@ enum Commands {
         /// Use for local development when you don't want external access.
         #[arg(short, long)]
         local: bool,
+
+        /// Enable integrated L7 load balancer for multi-worker mode.
+        /// The load balancer listens on base_port and distributes requests
+        /// to workers using round-robin with health checks.
+        #[arg(long)]
+        lb: bool,
     },
     /// Publish component to GitHub Container Registry (ghcr.io)
     ///
@@ -483,8 +489,9 @@ async fn main() -> Result<()> {
             workers,
             port,
             local,
+            lb,
         } => {
-            commands::run::execute(component.as_deref(), workers, port, local).await?;
+            commands::run::execute(component.as_deref(), workers, port, local, lb).await?;
         },
         #[cfg(feature = "registry")]
         Commands::Publish {
