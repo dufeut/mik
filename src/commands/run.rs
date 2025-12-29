@@ -61,13 +61,18 @@ pub async fn execute(
         return run_single_instance(component_path, port_override).await;
     }
 
-    // Auto-detect workers: 0 means one worker per CPU core
+    // Auto-detect workers: 0 means optimal workers for integrated LB
+    // Benchmarks show 6-8 workers is optimal regardless of CPU cores
+    // (LB proxy layer becomes the bottleneck beyond 8 workers)
     let workers = if workers == 0 {
         let cores = std::thread::available_parallelism()
             .map(|p| p.get() as u16)
             .unwrap_or(4);
-        println!("Auto-detected {} CPU cores", cores);
-        cores
+        // Cap at 8 workers for integrated LB (optimal based on benchmarks)
+        // For more workers, use external LB (nginx/haproxy) without --lb flag
+        let optimal = cores.min(8);
+        println!("Auto-detected {} CPU cores, using {} workers (optimal for integrated LB)", cores, optimal);
+        optimal
     } else {
         workers
     };
