@@ -1,3 +1,6 @@
+// Test-specific lint suppressions
+#![allow(clippy::manual_range_contains)]
+
 //! Concurrent module loading tests based on CVE-2024-47813.
 //!
 //! CVE-2024-47813 was a race condition in Wasmtime's Engine type registry

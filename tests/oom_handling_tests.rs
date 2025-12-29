@@ -1,3 +1,7 @@
+// Test-specific lint suppressions
+#![allow(clippy::println_empty_string)]
+#![allow(clippy::manual_range_contains)]
+
 //! OOM (Out of Memory) handling tests for the mikrozen runtime.
 //!
 //! These tests are based on Wasmtime issue #12069, which describes a planned initiative

@@ -1,3 +1,7 @@
+// Test-specific lint suppressions
+#![allow(clippy::println_empty_string)]
+#![allow(clippy::expect_fun_call)]
+
 //! Oversized Response Tests - Wasmtime Bug #12141
 //!
 //! These tests verify that the runtime handles oversized HTTP responses correctly,

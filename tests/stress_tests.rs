@@ -204,9 +204,9 @@ async fn test_concurrent_request_handling() {
                     Ok(resp) => {
                         let elapsed_us = start.elapsed().as_micros() as u64;
                         let status = resp.status().as_u16();
-                        if status >= 200 && status < 300 {
+                        if (200..300).contains(&status) {
                             metrics.record_success(elapsed_us);
-                        } else if status >= 400 && status < 500 {
+                        } else if (400..500).contains(&status) {
                             metrics.record_client_error(elapsed_us);
                         } else {
                             metrics.record_server_error(elapsed_us);
@@ -271,9 +271,9 @@ async fn test_burst_traffic() {
                 Ok(resp) => {
                     let elapsed_us = req_start.elapsed().as_micros() as u64;
                     let status = resp.status().as_u16();
-                    if status >= 200 && status < 300 {
+                    if (200..300).contains(&status) {
                         metrics.record_success(elapsed_us);
-                    } else if status >= 400 && status < 500 {
+                    } else if (400..500).contains(&status) {
                         metrics.record_client_error(elapsed_us);
                     } else {
                         metrics.record_server_error(elapsed_us);
@@ -350,9 +350,9 @@ async fn test_rate_limiting_behavior() {
                         if status == 429 || status == 503 {
                             rate_limited.fetch_add(1, Ordering::Relaxed);
                             metrics.record_client_error(elapsed_us);
-                        } else if status >= 200 && status < 300 {
+                        } else if (200..300).contains(&status) {
                             metrics.record_success(elapsed_us);
-                        } else if status >= 400 && status < 500 {
+                        } else if (400..500).contains(&status) {
                             metrics.record_client_error(elapsed_us);
                         } else {
                             metrics.record_server_error(elapsed_us);
@@ -412,7 +412,7 @@ async fn test_rate_limit_recovery() {
                 Ok(resp) => {
                     let elapsed_us = start.elapsed().as_micros() as u64;
                     let status = resp.status().as_u16();
-                    if status >= 200 && status < 300 {
+                    if (200..300).contains(&status) {
                         metrics.record_success(elapsed_us);
                     } else {
                         metrics.record_client_error(elapsed_us);
@@ -506,9 +506,9 @@ async fn test_memory_pressure_large_requests() {
                 Ok(resp) => {
                     let elapsed_us = start.elapsed().as_micros() as u64;
                     let status = resp.status().as_u16();
-                    if status >= 200 && status < 300 {
+                    if (200..300).contains(&status) {
                         metrics.record_success(elapsed_us);
-                    } else if status >= 400 && status < 500 {
+                    } else if (400..500).contains(&status) {
                         metrics.record_client_error(elapsed_us);
                     } else {
                         metrics.record_server_error(elapsed_us);
@@ -571,9 +571,9 @@ async fn test_sustained_load() {
                 Ok(resp) => {
                     let elapsed_us = req_start.elapsed().as_micros() as u64;
                     let status = resp.status().as_u16();
-                    if status >= 200 && status < 300 {
+                    if (200..300).contains(&status) {
                         metrics.record_success(elapsed_us);
-                    } else if status >= 400 && status < 500 {
+                    } else if (400..500).contains(&status) {
                         metrics.record_client_error(elapsed_us);
                     } else {
                         metrics.record_server_error(elapsed_us);
@@ -646,7 +646,7 @@ async fn test_connection_exhaustion_recovery() {
                 Ok(resp) => {
                     let elapsed_us = start.elapsed().as_micros() as u64;
                     let status = resp.status().as_u16();
-                    if status >= 200 && status < 300 {
+                    if (200..300).contains(&status) {
                         metrics.record_success(elapsed_us);
                     } else {
                         metrics.record_server_error(elapsed_us);
@@ -787,9 +787,9 @@ async fn test_mixed_request_patterns() {
                     Ok(resp) => {
                         let elapsed_us = start.elapsed().as_micros() as u64;
                         let status = resp.status().as_u16();
-                        if status >= 200 && status < 300 {
+                        if (200..300).contains(&status) {
                             metrics.record_success(elapsed_us);
-                        } else if status >= 400 && status < 500 {
+                        } else if (400..500).contains(&status) {
                             metrics.record_client_error(elapsed_us);
                         } else {
                             metrics.record_server_error(elapsed_us);

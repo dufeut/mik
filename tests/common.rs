@@ -115,6 +115,7 @@ impl TestHostBuilder {
     }
 
     /// Set the static files directory.
+    #[allow(dead_code)]
     pub fn with_static_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.static_dir = Some(path.into());
         self
@@ -257,6 +258,7 @@ impl TestHost {
     }
 
     /// Get a reference to the HTTP client.
+    #[allow(dead_code)]
     pub fn client(&self) -> &reqwest::Client {
         &self.client
     }
@@ -437,18 +439,19 @@ async fn handle_test_request(
             let file_path = path.strip_prefix("/static/").unwrap_or("");
             let full_path = dir.join(file_path);
 
-            if full_path.exists() && full_path.is_file() {
-                if let Ok(contents) = tokio::fs::read(&full_path).await {
-                    let content_type = mime_guess::from_path(&full_path)
-                        .first_or_octet_stream()
-                        .to_string();
+            if full_path.exists()
+                && full_path.is_file()
+                && let Ok(contents) = tokio::fs::read(&full_path).await
+            {
+                let content_type = mime_guess::from_path(&full_path)
+                    .first_or_octet_stream()
+                    .to_string();
 
-                    return Ok(Response::builder()
-                        .status(200)
-                        .header("Content-Type", content_type)
-                        .body(Full::new(Bytes::from(contents)))
-                        .unwrap());
-                }
+                return Ok(Response::builder()
+                    .status(200)
+                    .header("Content-Type", content_type)
+                    .body(Full::new(Bytes::from(contents)))
+                    .unwrap());
             }
 
             return Ok(Response::builder()
@@ -865,6 +868,7 @@ impl RealTestHostBuilder {
     }
 
     /// Set the execution timeout in seconds.
+    #[allow(dead_code)]
     pub fn with_execution_timeout(mut self, secs: u64) -> Self {
         self.execution_timeout_secs = secs;
         self

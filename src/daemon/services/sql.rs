@@ -703,7 +703,7 @@ mod tests {
                 &[
                     Value::Null,
                     Value::Integer(42),
-                    Value::Real(3.14),
+                    Value::Real(1.234),
                     Value::Text("hello".to_string()),
                     Value::Blob(vec![1, 2, 3, 4]),
                 ],
@@ -715,7 +715,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].values[1], Value::Null);
         assert_eq!(rows[0].values[2], Value::Integer(42));
-        assert_eq!(rows[0].values[3], Value::Real(3.14));
+        assert_eq!(rows[0].values[3], Value::Real(1.234));
         assert_eq!(rows[0].values[4], Value::Text("hello".to_string()));
         assert_eq!(rows[0].values[5], Value::Blob(vec![1, 2, 3, 4]));
     }
@@ -828,7 +828,7 @@ mod tests {
         let values = vec![
             Value::Null,
             Value::Integer(42),
-            Value::Real(3.14),
+            Value::Real(1.234),
             Value::Text("hello".to_string()),
             Value::Blob(vec![1, 2, 3]),
         ];

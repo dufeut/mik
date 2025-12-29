@@ -110,7 +110,7 @@ opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true
 opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"], optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
 
-# Caching
+# Caching and concurrency
 moka = { version = "0.12", features = ["sync"] }
 parking_lot = "0.12"
 
@@ -154,9 +154,8 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false, feat
 axum = "0.8"
 reqwest = { version = "0.12.28", features = ["rustls-tls"] }
 
-# Platform-specific dependencies
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.30", features = ["signal", "process"] } # Unix signal handling
+# CPU detection for auto worker count
+num_cpus = "1.16"
 
 [dev-dependencies]
 hyper = { version = "1.5", features = ["client"] }
@@ -164,6 +163,7 @@ tower = { version = "0.5", features = ["util"] }
 axum-test-helpers = { package = "axum-test-helper", version = "0.4" }
 serial_test = "3"
 proptest = "1.5"
+tokio-test = "0.4"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 # =============================================================================
@@ -172,6 +172,10 @@ criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "runtime_benchmarks"
+harness = false
+
+[[bench]]
+name = "runtime_bench"
 harness = false
 
 # =============================================================================

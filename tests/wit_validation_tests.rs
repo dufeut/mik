@@ -1,3 +1,7 @@
+// Test-specific lint suppressions
+#![allow(clippy::expect_fun_call)]
+#![allow(clippy::approx_constant)]
+
 //! WIT (WebAssembly Interface Types) Validation Tests
 //!
 //! These tests verify that WASM modules conform to the expected WIT contracts

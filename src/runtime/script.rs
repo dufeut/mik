@@ -840,11 +840,11 @@ mod tests {
     #[test]
     fn test_script_return_float() {
         let result = run_simple_script(
-            "export default function(input) { return 3.14; }",
+            "export default function(input) { return 1.234; }",
             &json!(null),
         )
         .unwrap();
-        assert_eq!(result, json!(3.14));
+        assert_eq!(result, json!(1.234));
     }
 
     #[test]
@@ -1253,7 +1253,7 @@ mod tests {
     fn test_security_no_dangerous_globals() {
         // Check multiple dangerous globals at once
         let result = run_simple_script(
-            r#"export default function(input) {
+            r"export default function(input) {
                 return {
                     require: typeof require,
                     process: typeof process,
@@ -1263,14 +1263,14 @@ mod tests {
                     Buffer: typeof Buffer,
                     setImmediate: typeof setImmediate,
                 };
-            }"#,
+            }",
             &json!(null),
         )
         .unwrap();
 
         let obj = result.as_object().unwrap();
         for (key, value) in obj {
-            assert_eq!(value, "undefined", "Global '{}' should be undefined", key);
+            assert_eq!(value, "undefined", "Global '{key}' should be undefined");
         }
     }
 
@@ -1279,10 +1279,10 @@ mod tests {
         // Prototype pollution is contained per-script (each gets fresh context)
         // A NEW script execution should NOT see pollution from previous scripts
         let result = run_simple_script(
-            r#"export default function(input) {
+            r"export default function(input) {
                 var test = {};
                 return test.polluted === undefined;
-            }"#,
+            }",
             &json!(null),
         )
         .unwrap();
@@ -1294,7 +1294,7 @@ mod tests {
     fn test_security_constructor_chain_blocked() {
         // constructor.constructor should not escape
         let result = run_simple_script(
-            r#"export default function(input) {
+            r"export default function(input) {
                 try {
                     var f = (function(){}).constructor.constructor;
                     var g = f('return this')();
@@ -1302,7 +1302,7 @@ mod tests {
                 } catch(e) {
                     return 'error';
                 }
-            }"#,
+            }",
             &json!(null),
         )
         .unwrap();

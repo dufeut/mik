@@ -675,7 +675,7 @@ async fn test_script_complex_json_input() {
     let complex_input = serde_json::json!({
         "string": "hello",
         "number": 42,
-        "float": 3.14,
+        "float": 1.234,
         "boolean": true,
         "null_value": null,
         "array": [1, 2, 3, "mixed", true],

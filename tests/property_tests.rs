@@ -1,3 +1,6 @@
+// Test-specific lint suppressions
+#![allow(clippy::needless_borrow)]
+
 //! Property-based tests for security-critical functions.
 //!
 //! These tests use proptest to verify invariants that must always hold,

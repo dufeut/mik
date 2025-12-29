@@ -1,3 +1,6 @@
+// Test module structure lint suppressions
+#![allow(clippy::duplicate_mod)]
+
 //! Integration test runner for mikrozen-host.
 //!
 //! This file serves as the entry point for the integration test suite.

@@ -1,3 +1,7 @@
+// Test-specific lint suppressions
+#![allow(clippy::println_empty_string)]
+#![allow(clippy::manual_range_contains)]
+
 //! Memory violation logging tests for the mikrozen runtime.
 //!
 //! These tests are based on wasmCloud issue #3050, which tracks the need to

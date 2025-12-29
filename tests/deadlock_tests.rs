@@ -767,7 +767,7 @@ mod tests {
 
     #[test]
     fn test_health_check_threshold() {
-        let health_latencies_ms = vec![10, 15, 12, 500, 20, 25, 1500, 30];
+        let health_latencies_ms = [10, 15, 12, 500, 20, 25, 1500, 30];
 
         let threshold_ms = 1000;
         let slow_count = health_latencies_ms

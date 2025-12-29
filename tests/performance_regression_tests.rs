@@ -1,3 +1,9 @@
+// Test-specific lint suppressions
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::assertions_on_constants)]
+
 //! Performance regression tests for the mikrozen runtime.
 //!
 //! These tests track latency percentiles (p50, p95, p99, p999) and throughput

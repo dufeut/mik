@@ -1,3 +1,6 @@
+// Test-specific lint suppressions
+#![allow(clippy::println_empty_string)]
+
 //! Timeout and epoch interruption tests for the mikrozen runtime.
 //!
 //! These tests verify that the runtime's timeout mechanisms work correctly:

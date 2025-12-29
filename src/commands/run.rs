@@ -4,8 +4,9 @@
 //! - **Multi-module mode**: `mik run` - serves modules from `[server].modules` directory
 //! - **Single component mode**: `mik run path/to/component.wasm` - serves a single component
 //!
-//! Multi-worker mode:
+//! Multi-worker mode (for use with external L7 load balancer):
 //! - `mik run --workers 4` - spawns 4 worker processes on ports 3000-3003
+//! - `mik run --workers 0` - auto-detect workers (one per CPU core)
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
@@ -30,14 +31,21 @@ use crate::runtime::HostBuilder;
 ///
 /// - `mik run --workers 4` - Multi-worker mode
 ///   - Spawns 4 worker processes on consecutive ports
-///   - Use with nginx/caddy for load balancing
+///   - Use with nginx/caddy/haproxy for L7 load balancing
 ///
 /// - `mik run --workers 0` - Auto-detect workers (one per CPU core)
 pub async fn execute(
     component_path: Option<&str>,
     workers: u16,
     port_override: Option<u16>,
+    local_only: bool,
 ) -> Result<()> {
+    // Set MIK_LOCAL env var if --local flag is set
+    if local_only {
+        // SAFETY: We're setting env var before spawning any threads
+        unsafe { std::env::set_var("MIK_LOCAL", "1") };
+    }
+
     // Check if we're a spawned worker (internal flag)
     if std::env::var("MIK_WORKER_ID").is_ok() {
         // We're a worker - run single instance
@@ -57,7 +65,7 @@ pub async fn execute(
 
     // Multi-worker mode: spawn child processes
     if workers > 1 {
-        return run_multi_worker(component_path, workers, port_override).await;
+        return run_multi_worker(component_path, workers, port_override, local_only).await;
     }
 
     // Single worker mode
@@ -69,6 +77,7 @@ async fn run_multi_worker(
     component_path: Option<&str>,
     workers: u16,
     port_override: Option<u16>,
+    local_only: bool,
 ) -> Result<()> {
     // Get base port from override, mik.toml, or default
     let base_port = port_override.unwrap_or_else(|| {
@@ -118,16 +127,20 @@ async fn run_multi_worker(
 
         cmd.arg("--port").arg(port.to_string());
         cmd.env("MIK_WORKER_ID", i.to_string());
+        if local_only {
+            cmd.env("MIK_LOCAL", "1");
+        }
 
         // Suppress worker stdout to avoid interleaving
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::inherit());
 
+        let bind_addr = if local_only { "127.0.0.1" } else { "0.0.0.0" };
         let child = cmd
             .spawn()
             .with_context(|| format!("Failed to spawn worker {i}"))?;
         println!(
-            "  Worker {i}: http://127.0.0.1:{port} (pid: {})",
+            "  Worker {i}: http://{bind_addr}:{port} (pid: {})",
             child.id()
         );
         children.push(child);
@@ -233,8 +246,12 @@ async fn run_single_instance(
     let port = builder.get_port();
     let host = builder.build().context("Failed to build host")?;
 
-    // Use HOST env var if set (for Docker), otherwise default to 127.0.0.1
-    let bind_host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    // Determine bind address: --local flag or HOST env var or default 0.0.0.0
+    let bind_host = if std::env::var("MIK_LOCAL").is_ok() {
+        "127.0.0.1".to_string()
+    } else {
+        std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string())
+    };
     let addr: SocketAddr = format!("{bind_host}:{port}")
         .parse()
         .context("Invalid address")?;

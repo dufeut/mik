@@ -1,3 +1,6 @@
+// Test-specific lint suppressions
+#![allow(clippy::useless_vec)]
+
 //! File I/O tests for the mikrozen runtime.
 //!
 //! These tests verify that the runtime handles file operations correctly,

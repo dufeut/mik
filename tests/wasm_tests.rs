@@ -75,7 +75,7 @@ async fn test_echo_module_complex_json() {
     let input = serde_json::json!({
         "string": "hello",
         "number": 42,
-        "float": 3.14,
+        "float": 1.234,
         "boolean": true,
         "null": null,
         "array": [1, 2, 3],

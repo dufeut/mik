@@ -272,6 +272,7 @@ enum Commands {
     ///   mik run                          # Auto-detect latest build
     ///   mik run target/composed.wasm     # Run specific component
     ///   mik run --workers 4              # Start 4 workers on ports 3000-3003
+    ///   mik run --workers 0              # Auto-detect workers (one per CPU)
     Run {
         /// Path to component (default: auto-detect)
         component: Option<String>,
@@ -279,7 +280,7 @@ enum Commands {
         /// Number of worker processes for horizontal scaling.
         /// Use 0 for auto-detect (one worker per CPU core).
         /// Each worker runs on a separate port (base_port, base_port+1, ...).
-        /// Use with nginx/caddy for load balancing.
+        /// Use with nginx/caddy/haproxy for L7 load balancing.
         #[arg(short, long, default_value = "1")]
         workers: u16,
 
@@ -287,6 +288,11 @@ enum Commands {
         /// Worker N listens on port + N.
         #[arg(short, long)]
         port: Option<u16>,
+
+        /// Bind to localhost only (127.0.0.1) instead of all interfaces (0.0.0.0).
+        /// Use for local development when you don't want external access.
+        #[arg(short, long)]
+        local: bool,
     },
     /// Publish component to GitHub Container Registry (ghcr.io)
     ///
@@ -476,8 +482,9 @@ async fn main() -> Result<()> {
             component,
             workers,
             port,
+            local,
         } => {
-            commands::run::execute(component.as_deref(), workers, port).await?;
+            commands::run::execute(component.as_deref(), workers, port, local).await?;
         },
         #[cfg(feature = "registry")]
         Commands::Publish {

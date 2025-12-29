@@ -788,11 +788,21 @@ pub(crate) struct CachedComponent {
 /// Uses weigher function to ensure total bytes don't exceed limit.
 type ModuleCache = MokaCache<String, Arc<CachedComponent>>;
 
-/// Shared state across all requests.
+/// Shared state for the HTTP runtime.
 ///
-/// SAFETY: Lock ordering to prevent deadlock: `request_semaphore` -> `module_semaphores` -> `circuit_breaker`
+/// This struct contains all the state needed to handle HTTP requests:
+/// - Wasmtime Engine and Linker for WASM execution
+/// - Module cache for compiled components
+/// - Configuration and limits
+/// - Circuit breaker for reliability
+///
+/// It is shared across all request handlers via `Arc`.
+///
+/// # Thread Safety
+///
+/// Lock ordering to prevent deadlock: `request_semaphore` -> `module_semaphores` -> `circuit_breaker`
 /// Note: cache is now thread-safe internally (moka), no external locking needed.
-pub(crate) struct SharedState {
+pub struct SharedState {
     pub(crate) engine: Engine,
     pub(crate) linker: Linker<HostState>,
     pub(crate) modules_dir: PathBuf,
@@ -1374,8 +1384,22 @@ impl Host {
     }
 }
 
+/// Handle an HTTP request using the shared runtime state.
+///
+/// This is the main request handler that can be used by both the standard
+/// runtime and the high-performance server backends.
+///
+/// # Arguments
+///
+/// * `shared` - Shared runtime state containing engine, cache, and config
+/// * `req` - The incoming HTTP request
+/// * `remote_addr` - Remote address of the client
+///
+/// # Returns
+///
+/// The HTTP response to send back to the client.
 #[allow(clippy::too_many_lines)]
-async fn handle_request(
+pub async fn handle_request(
     shared: Arc<SharedState>,
     req: Request<hyper::body::Incoming>,
     remote_addr: SocketAddr,

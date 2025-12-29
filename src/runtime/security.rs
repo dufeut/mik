@@ -1043,30 +1043,27 @@ mod tests {
             assert_eq!(
                 validate_windows_path(name),
                 Err(PathTraversalError::ReservedWindowsName),
-                "Should reject {}",
-                name
+                "Should reject {name}"
             );
         }
 
         // COM ports 1-9
         for i in 1..=9 {
-            let name = format!("COM{}", i);
+            let name = format!("COM{i}");
             assert_eq!(
                 validate_windows_path(&name),
                 Err(PathTraversalError::ReservedWindowsName),
-                "Should reject {}",
-                name
+                "Should reject {name}"
             );
         }
 
         // LPT ports 1-9
         for i in 1..=9 {
-            let name = format!("LPT{}", i);
+            let name = format!("LPT{i}");
             assert_eq!(
                 validate_windows_path(&name),
                 Err(PathTraversalError::ReservedWindowsName),
-                "Should reject {}",
-                name
+                "Should reject {name}"
             );
         }
     }

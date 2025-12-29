@@ -1,3 +1,6 @@
+// Test-specific lint suppressions
+#![allow(clippy::collapsible_if)]
+
 //! HTTP edge case tests for the mikrozen runtime.
 //!
 //! These tests cover edge cases in HTTP handling that have caused

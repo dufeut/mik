@@ -1,3 +1,8 @@
+// Test-specific lint suppressions
+#![allow(clippy::println_empty_string)]
+#![allow(clippy::redundant_guards)]
+#![allow(clippy::identity_op)]
+
 //! Graceful shutdown tests for the mikrozen runtime.
 //!
 //! These tests are based on wasmCloud issue #3602, which describes issues with

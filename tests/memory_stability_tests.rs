@@ -1,3 +1,6 @@
+// Test-specific lint suppressions
+#![allow(dead_code)]
+
 //! Memory stability tests for the mikrozen runtime.
 //!
 //! These tests verify that the runtime doesn't leak memory over time,

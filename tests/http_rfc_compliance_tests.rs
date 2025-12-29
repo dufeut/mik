@@ -1,3 +1,6 @@
+// Test-specific lint suppressions
+#![allow(clippy::collapsible_if)]
+
 //! HTTP RFC Compliance Tests
 //!
 //! Tests based on Wasmtime HTTP bugs #11770-#11780 to ensure proper

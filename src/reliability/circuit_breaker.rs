@@ -584,8 +584,7 @@ mod tests {
             cb.record_failure("test");
             assert!(
                 !cb.is_open("test"),
-                "Circuit should not be open after {} failures",
-                i
+                "Circuit should not be open after {i} failures"
             );
             assert_eq!(cb.failure_count("test"), i as u32);
         }
@@ -810,8 +809,7 @@ mod tests {
             cb.record_failure("test");
             assert!(
                 !cb.is_open("test"),
-                "Circuit should not be open after {} failures",
-                i
+                "Circuit should not be open after {i} failures"
             );
         }
 
@@ -982,9 +980,9 @@ mod tests {
             reason: CircuitOpenReason::Open,
         };
 
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("test-service"));
-        assert!(display.contains("5"));
+        assert!(display.contains('5'));
     }
 
     #[test]
@@ -995,7 +993,7 @@ mod tests {
             reason: CircuitOpenReason::ProbeInFlight,
         };
 
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("test-service"));
         assert!(display.contains("probe in flight"));
     }

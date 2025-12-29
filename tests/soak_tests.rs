@@ -1,3 +1,9 @@
+// Test-specific lint suppressions
+#![allow(dead_code)]
+#![allow(clippy::redundant_locals)]
+#![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::manual_range_contains)]
+
 //! Soak tests for long-running stability of the mikrozen runtime.
 //!
 //! These tests run for extended periods to detect issues that only

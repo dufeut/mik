@@ -120,3 +120,24 @@ pub mod reliability;
 /// - Cache sizes
 /// - Concurrency limits
 pub mod constants;
+
+/// Configuration types for the mik runtime.
+///
+/// This module provides configuration structs for:
+/// - High-performance server settings ([`HighPerformanceServerConfig`])
+/// - Performance tuning options ([`PerformanceConfig`])
+/// - Resource limits ([`LimitsConfig`])
+///
+/// All configuration types support serde for TOML parsing and provide
+/// sensible defaults suitable for development use.
+///
+/// # Example
+///
+/// ```
+/// use mik::config::{HighPerformanceServerConfig, ConfigError};
+///
+/// let config = HighPerformanceServerConfig::default();
+/// assert!(config.validate().is_ok());
+/// assert_eq!(config.port, 3000);
+/// ```
+pub mod config;
