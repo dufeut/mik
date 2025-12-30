@@ -1,9 +1,11 @@
-//! Build WASI component from Rust project.
+//! Build WASI component from source.
 //!
-//! Uses cargo-component to build, optionally composes all dependencies using wac.
+//! Supports multiple languages: Rust (default) and TypeScript.
+//! Uses cargo-component or jco depending on language.
+//! Optionally composes all dependencies using wac.
 //! Outputs packaged component to dist/ folder.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -20,132 +22,54 @@ use crate::utils::{format_bytes, get_cargo_name};
 /// Controls how frequently the spinner animation updates (100ms = 10 FPS).
 const SPINNER_TICK_INTERVAL_MS: u64 = 100;
 
+/// Normalize language string to canonical form.
+fn normalize_language(lang: &str) -> &'static str {
+    match lang.to_lowercase().as_str() {
+        "rust" | "rs" => "rust",
+        "typescript" | "ts" => "typescript",
+        _ => "rust", // default
+    }
+}
+
 /// Build the component.
 #[allow(clippy::too_many_lines)]
-pub async fn execute(release: bool, compose: bool) -> Result<()> {
-    // Check for Cargo.toml (Rust project)
-    if !Path::new("Cargo.toml").exists() {
-        anyhow::bail!("No Cargo.toml found. Run from a Rust project directory.");
-    }
-
+pub async fn execute(release: bool, compose: bool, lang_override: Option<String>) -> Result<()> {
     // Load mik.toml if it exists
     let manifest = Manifest::load().ok();
+
+    // Resolve language: flag > mik.toml > rust
+    let language = lang_override
+        .as_deref()
+        .or_else(|| {
+            manifest
+                .as_ref()
+                .and_then(|m| m.project.language.as_deref())
+        })
+        .map(normalize_language)
+        .unwrap_or("rust");
+
+    // Get project name
     let name = manifest
         .as_ref()
         .map(|m| m.project.name.clone())
         .or_else(get_cargo_name)
         .unwrap_or_else(|| "component".to_string());
 
-    println!("Building: {name}");
+    println!("Building: {name} ({language})");
 
-    // Check for cargo-component
-    if check_tool("cargo-component").is_err() {
-        eprintln!("\nError: cargo-component not found\n");
-        eprintln!("cargo-component is required to build WASI components.");
-        eprintln!("\nInstall with:");
-        eprintln!("  cargo install cargo-component");
-        eprintln!("\nFor more information, visit:");
-        eprintln!("  https://github.com/bytecodealliance/cargo-component");
-        anyhow::bail!("Missing required tool: cargo-component");
-    }
+    // Build based on language
+    let (wasm_path, target_base) = match language {
+        "rust" => build_rust(&name, release).await?,
+        "typescript" => build_typescript(&name).await?,
+        _ => bail!("Unsupported language: {language}"),
+    };
 
-    // Build with cargo-component
-    let mut args = vec!["component", "build", "--target", "wasm32-wasip2"];
-    if release {
-        args.push("--release");
-        println!("Mode: release");
-    } else {
-        println!("Mode: debug");
-    }
-
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message("Building component...");
-    spinner.enable_steady_tick(std::time::Duration::from_millis(SPINNER_TICK_INTERVAL_MS));
-
-    let output = Command::new("cargo")
-        .args(&args)
-        .output()
-        .context("Failed to run cargo component build")?;
-
-    spinner.finish_and_clear();
-
-    if !output.status.success() {
-        eprintln!("\n{}", "=".repeat(60));
-        eprintln!("Build Failed");
-        eprintln!("{}", "=".repeat(60));
-
-        // Print stderr if available
-        if !output.stderr.is_empty()
-            && let Ok(stderr) = String::from_utf8(output.stderr.clone())
-        {
-            eprintln!("\n{stderr}");
-        }
-
-        // Print stdout if available (cargo often puts errors here too)
-        if !output.stdout.is_empty()
-            && let Ok(stdout) = String::from_utf8(output.stdout.clone())
-        {
-            eprintln!("{stdout}");
-        }
-
-        eprintln!("\n{}", "=".repeat(60));
-        eprintln!("Common Issues:");
-        eprintln!("{}", "=".repeat(60));
-        eprintln!("\n1. Missing wasi-http dependency:");
-        eprintln!("   Add to Cargo.toml:");
-        eprintln!("   [dependencies]");
-        eprintln!("   wasi-http = \"0.2\"");
-        eprintln!("\n2. Wrong target configuration:");
-        eprintln!("   Ensure Cargo.toml has:");
-        eprintln!("   [package.metadata.component.target]");
-        eprintln!("   path = \"wit\"");
-        eprintln!("\n3. Missing WIT files:");
-        eprintln!("   Create wit/ directory with world definition");
-        eprintln!("\n4. Incompatible dependencies:");
-        eprintln!("   Ensure all deps support wasm32-wasip2 target");
-        eprintln!("\nFor more help, check your project's wit/ directory and Cargo.toml\n");
-
-        anyhow::bail!("Compilation failed");
-    }
-
-    let build_type = if release { "release" } else { "debug" };
-
-    // Rust converts dashes to underscores in crate names
-    let crate_name = name.replace('-', "_");
-
-    // Find the target directory (may be in workspace root)
-    let target_base = find_target_dir()?;
-
-    let wasm_path = target_base
-        .join("wasm32-wasip2")
-        .join(build_type)
-        .join(format!("{crate_name}.wasm"));
-
-    // Verify the WASM file was created
-    if !wasm_path.exists() {
-        eprintln!("\nError: WASM file not found at expected location");
-        eprintln!("Expected: {}", wasm_path.display());
-        eprintln!("\nPossible causes:");
-        eprintln!("1. Build succeeded but output location is different");
-        eprintln!("2. Crate name mismatch (Cargo.toml vs mik.toml)");
-        eprintln!("3. Workspace configuration issue");
-        eprintln!("\nTry:");
-        eprintln!("  - Check crate name in Cargo.toml matches mik.toml");
-        eprintln!("  - Look for .wasm files: find target -name '*.wasm'");
-        anyhow::bail!("WASM output file not found");
-    }
-
-    // Optimize with wasm-opt for release builds
-    if release {
+    // Optimize WASM (strip debug info, names, etc.) in release mode
+    if release && language == "rust" {
         optimize_wasm(&wasm_path)?;
     }
 
-    // Compose HTTP handler with bridge (if enabled and app type)
+    // Compose HTTP handler with bridge (if enabled)
     let http_composed = if let Some(ref m) = manifest {
         compose_http_handler(&wasm_path, &target_base, m).await?
     } else {
@@ -175,6 +99,205 @@ pub async fn execute(release: bool, compose: bool) -> Result<()> {
     package_to_dist(&final_wasm, &name, release, did_compose)?;
 
     Ok(())
+}
+
+// =============================================================================
+// Language-specific build functions
+// =============================================================================
+
+/// Build Rust project with cargo-component.
+async fn build_rust(name: &str, release: bool) -> Result<(PathBuf, PathBuf)> {
+    // Check for Cargo.toml
+    if !Path::new("Cargo.toml").exists() {
+        bail!("No Cargo.toml found. Run from a Rust project directory or use --lang flag.");
+    }
+
+    // Check for cargo-component
+    if check_tool("cargo-component").is_err() {
+        eprintln!("\nError: cargo-component not found\n");
+        eprintln!("cargo-component is required to build Rust WASI components.");
+        eprintln!("\nInstall with:");
+        eprintln!("  cargo install cargo-component");
+        bail!("Missing required tool: cargo-component");
+    }
+
+    // Build with cargo-component
+    let mut args = vec!["component", "build", "--target", "wasm32-wasip2"];
+    if release {
+        args.push("--release");
+        println!("Mode: release");
+    } else {
+        println!("Mode: debug");
+    }
+
+    let spinner = create_spinner("Building component...");
+
+    let output = Command::new("cargo")
+        .args(&args)
+        .output()
+        .context("Failed to run cargo component build")?;
+
+    spinner.finish_and_clear();
+
+    if !output.status.success() {
+        print_build_error(&output, "Rust");
+        bail!("Rust compilation failed");
+    }
+
+    let build_type = if release { "release" } else { "debug" };
+    let crate_name = name.replace('-', "_");
+    let target_base = find_target_dir()?;
+
+    let wasm_path = target_base
+        .join("wasm32-wasip2")
+        .join(build_type)
+        .join(format!("{crate_name}.wasm"));
+
+    if !wasm_path.exists() {
+        bail!("WASM output not found: {}", wasm_path.display());
+    }
+
+    Ok((wasm_path, target_base))
+}
+
+/// Get the npm command (npm.cmd on Windows, npm elsewhere).
+fn npm_command() -> Command {
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("npm")
+    }
+}
+
+/// Get npm command arguments (with /c npm prefix on Windows).
+#[cfg(windows)]
+fn npm_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut result: Vec<&'a str> = vec!["/c", "npm"];
+    result.extend(args.iter().copied());
+    result
+}
+
+#[cfg(not(windows))]
+fn npm_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.to_vec()
+}
+
+/// Check if npm is available.
+fn check_npm() -> bool {
+    npm_command()
+        .args(npm_args(&["--version"]))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Build TypeScript project with jco componentize.
+async fn build_typescript(name: &str) -> Result<(PathBuf, PathBuf)> {
+    // Check for package.json
+    if !Path::new("package.json").exists() {
+        bail!("No package.json found. Run from a TypeScript project directory.");
+    }
+
+    // Check for npm
+    if !check_npm() {
+        bail!("npm not found. Install Node.js to build TypeScript projects.");
+    }
+
+    // Fetch WIT dependencies if wit/deps doesn't exist but deps.toml does
+    if Path::new("wit/deps.toml").exists() && !Path::new("wit/deps").exists() {
+        println!("Fetching WIT dependencies...");
+        let output = Command::new("wkg")
+            .args(["wit", "fetch"])
+            .output()
+            .context("Failed to run wkg wit fetch. Install wkg: cargo install wkg")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("Warning: wkg wit fetch failed: {stderr}");
+            eprintln!("You may need to install wkg: cargo install wkg");
+        }
+    }
+
+    // Install dependencies if node_modules doesn't exist
+    if !Path::new("node_modules").exists() {
+        println!("Installing npm dependencies...");
+        let output = npm_command()
+            .args(npm_args(&["install"]))
+            .output()
+            .context("Failed to run npm install")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("npm install failed: {stderr}");
+        }
+    }
+
+    // Run npm build
+    let spinner = create_spinner("Building TypeScript component...");
+
+    let output = npm_command()
+        .args(npm_args(&["run", "build"]))
+        .output()
+        .context("Failed to run npm run build")?;
+
+    spinner.finish_and_clear();
+
+    if !output.status.success() {
+        print_build_error(&output, "TypeScript");
+        bail!("TypeScript build failed");
+    }
+
+    // Find the output wasm file
+    let wasm_path = PathBuf::from(format!("{name}.wasm"));
+    if !wasm_path.exists() {
+        // Try handler.wasm as fallback
+        let fallback = PathBuf::from("handler.wasm");
+        if fallback.exists() {
+            return Ok((fallback, PathBuf::from(".")));
+        }
+        bail!("WASM output not found: {}.wasm or handler.wasm", name);
+    }
+
+    Ok((wasm_path, PathBuf::from(".")))
+}
+
+// =============================================================================
+// Helper functions
+// =============================================================================
+
+/// Create a spinner with the given message.
+fn create_spinner(msg: &str) -> ProgressBar {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    spinner.set_message(msg.to_string());
+    spinner.enable_steady_tick(std::time::Duration::from_millis(SPINNER_TICK_INTERVAL_MS));
+    spinner
+}
+
+/// Print build error with helpful information.
+fn print_build_error(output: &std::process::Output, language: &str) {
+    eprintln!("\n{}", "=".repeat(60));
+    eprintln!("{language} Build Failed");
+    eprintln!("{}", "=".repeat(60));
+
+    if !output.stderr.is_empty()
+        && let Ok(stderr) = String::from_utf8(output.stderr.clone())
+    {
+        eprintln!("\n{stderr}");
+    }
+
+    if !output.stdout.is_empty()
+        && let Ok(stdout) = String::from_utf8(output.stdout.clone())
+    {
+        eprintln!("{stdout}");
+    }
 }
 
 /// Package the built component to dist/ folder with tar.gz.
@@ -258,11 +381,6 @@ async fn compose_http_handler(
 ) -> Result<Option<PathBuf>> {
     // Check if HTTP handler composition is enabled
     if !manifest.composition.http_handler {
-        return Ok(None);
-    }
-
-    // Only compose "app" type projects (handlers)
-    if manifest.project.r#type != "app" {
         return Ok(None);
     }
 

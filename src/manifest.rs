@@ -16,8 +16,6 @@ use url::Url;
 pub struct Manifest {
     pub project: Project,
     #[serde(default)]
-    pub features: Features,
-    #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
@@ -383,33 +381,17 @@ pub struct Project {
     pub name: String,
     #[serde(default = "default_version")]
     pub version: String,
-    #[serde(default = "default_backend")]
-    pub backend: String,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
-    pub license: Option<String>,
-    #[serde(default)]
     pub authors: Vec<Author>,
-    #[serde(default)]
-    pub keywords: Vec<String>,
-    #[serde(default)]
-    pub urls: Option<ProjectUrls>,
-    /// Component type: "app" (HTTP handler) or "lib" (reusable component)
-    #[serde(default = "default_type")]
-    pub r#type: String,
+    /// Project language: rust (default), typescript, python, c
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 fn default_version() -> String {
     "0.1.0".to_string()
-}
-
-fn default_backend() -> String {
-    "2".to_string() // WASI Preview 2
-}
-
-fn default_type() -> String {
-    "app".to_string()
 }
 
 /// Author information.
@@ -418,26 +400,6 @@ pub struct Author {
     pub name: String,
     #[serde(default)]
     pub email: Option<String>,
-}
-
-/// Project URLs.
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct ProjectUrls {
-    #[serde(rename = "Homepage")]
-    pub homepage: Option<String>,
-    #[serde(rename = "Repository")]
-    pub repository: Option<String>,
-    #[serde(rename = "Issues")]
-    pub issues: Option<String>,
-}
-
-/// Feature flags.
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Features {
-    #[serde(default)]
-    pub default: Vec<String>,
-    #[serde(flatten)]
-    pub features: BTreeMap<String, Vec<String>>,
 }
 
 /// Dependency specification.
@@ -474,12 +436,6 @@ pub struct DependencyDetail {
     /// Registry URL (ghcr.io, custom registry)
     #[serde(default)]
     pub registry: Option<String>,
-    /// Feature flags to enable
-    #[serde(default)]
-    pub features: Vec<String>,
-    /// Disable default features
-    #[serde(default)]
-    pub default_features: Option<bool>,
 }
 
 /// Validation errors for manifest fields.
@@ -489,16 +445,9 @@ enum ValidationError {
     InvalidProjectName(String),
     EmptyVersion,
     InvalidVersion(String),
-    InvalidProjectType(String),
-    InvalidBackend(String),
     InvalidPort,
     EmptyModulesDir,
     DependencyError(String),
-    NonExistentFeature {
-        feature: String,
-        dependency: String,
-        available: Vec<String>,
-    },
 }
 
 impl fmt::Display for ValidationError {
@@ -528,24 +477,6 @@ impl fmt::Display for ValidationError {
                      See: https://semver.org/"
                 )
             },
-            Self::InvalidProjectType(project_type) => {
-                write!(
-                    f,
-                    "Invalid project type '{project_type}'. Must be either:\n  \
-                     - 'app' - HTTP handler application\n  \
-                     - 'lib' - Reusable component library\n  \
-                     Fix: Set type = \"app\" or type = \"lib\" in [project] section"
-                )
-            },
-            Self::InvalidBackend(backend) => {
-                write!(
-                    f,
-                    "Invalid backend version '{backend}'. Supported versions:\n  \
-                     - '2' - WASI Preview 2 (recommended)\n  \
-                     - '1' - WASI Preview 1 (legacy)\n  \
-                     Fix: Set backend = \"2\" in [project] section"
-                )
-            },
             Self::InvalidPort => {
                 write!(
                     f,
@@ -561,17 +492,6 @@ impl fmt::Display for ValidationError {
                 )
             },
             Self::DependencyError(msg) => write!(f, "{msg}"),
-            Self::NonExistentFeature {
-                feature,
-                dependency,
-                available,
-            } => {
-                write!(
-                    f,
-                    "Feature '{feature}' references non-existent feature '{dependency}'\n  \
-                     Available features: {available:?}"
-                )
-            },
         }
     }
 }
@@ -630,8 +550,6 @@ impl Manifest {
     /// - Required fields are non-empty
     /// - Project name follows naming conventions
     /// - Version follows semantic versioning
-    /// - Project type is valid ("app" or "lib")
-    /// - Backend version is valid
     /// - Server configuration is sensible
     /// - Component references exist (for path dependencies)
     /// - Dependencies have valid specifications
@@ -662,21 +580,7 @@ impl Manifest {
             ));
         }
 
-        // 3. Validate project type
-        if !matches!(self.project.r#type.as_str(), "app" | "lib") {
-            errors.push(ValidationError::InvalidProjectType(
-                self.project.r#type.clone(),
-            ));
-        }
-
-        // 4. Validate backend version
-        if !matches!(self.project.backend.as_str(), "1" | "2") {
-            errors.push(ValidationError::InvalidBackend(
-                self.project.backend.clone(),
-            ));
-        }
-
-        // 5. Validate server configuration
+        // 3. Validate server configuration
         if self.server.port == 0 {
             errors.push(ValidationError::InvalidPort);
         }
@@ -687,7 +591,7 @@ impl Manifest {
             errors.push(ValidationError::EmptyModulesDir);
         }
 
-        // 6. Validate dependencies
+        // 4. Validate dependencies
         let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
         for (name, dep) in &self.dependencies {
@@ -696,26 +600,10 @@ impl Manifest {
             }
         }
 
-        // 7. Validate dev-dependencies
+        // 5. Validate dev-dependencies
         for (name, dep) in &self.dev_dependencies {
             if let Err(e) = Self::validate_dependency(name, dep, manifest_dir, true) {
                 errors.push(ValidationError::DependencyError(e));
-            }
-        }
-
-        // 8. Validate features don't reference non-existent features
-        for (feature_name, dependencies) in &self.features.features {
-            for dep_feature in dependencies {
-                // Check if referenced feature exists
-                if !self.features.features.contains_key(dep_feature)
-                    && !self.features.default.contains(dep_feature)
-                {
-                    errors.push(ValidationError::NonExistentFeature {
-                        feature: feature_name.clone(),
-                        dependency: dep_feature.clone(),
-                        available: self.features.features.keys().cloned().collect(),
-                    });
-                }
             }
         }
 
@@ -1040,15 +928,10 @@ impl Default for Manifest {
             project: Project {
                 name: "my-component".to_string(),
                 version: default_version(),
-                backend: default_backend(),
                 description: None,
-                license: None,
                 authors: vec![],
-                keywords: vec![],
-                urls: None,
-                r#type: default_type(),
+                language: None,
             },
-            features: Features::default(),
             server: ServerConfig::default(),
             tracing: TracingConfig::default(),
             composition: CompositionConfig::default(),
@@ -1104,17 +987,11 @@ mod tests {
 [project]
 name = "my-app"
 version = "0.1.0"
-backend = "2"
 description = "My WASI app"
-type = "app"
-
-[features]
-default = ["json"]
-json = []
 
 [dependencies]
 serde = "1.0"
-mikrozen = { version = "0.1", features = ["json"] }
+mikrozen = { version = "0.1" }
 "#;
         let manifest: Manifest = toml::from_str(toml).unwrap();
         assert_eq!(manifest.project.name, "my-app");
@@ -1179,7 +1056,6 @@ version = "0.1.0"
 [project]
 name = "my-lib"
 version = "0.1.0"
-type = "lib"
 
 [composition]
 http_handler = false
@@ -1276,38 +1152,6 @@ version = "1.0"
         let error = result.unwrap_err().to_string();
         assert!(error.contains("Invalid version"));
         assert!(error.contains("semantic versioning"));
-    }
-
-    #[test]
-    fn test_validate_invalid_type() {
-        let toml = r#"
-[project]
-name = "my-app"
-version = "0.1.0"
-type = "invalid"
-"#;
-        let manifest: Manifest = toml::from_str(toml).unwrap();
-        let result = manifest.validate(Path::new("mik.toml"));
-        assert!(result.is_err());
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("Invalid project type"));
-        assert!(error.contains("app"));
-        assert!(error.contains("lib"));
-    }
-
-    #[test]
-    fn test_validate_invalid_backend() {
-        let toml = r#"
-[project]
-name = "my-app"
-version = "0.1.0"
-backend = "3"
-"#;
-        let manifest: Manifest = toml::from_str(toml).unwrap();
-        let result = manifest.validate(Path::new("mik.toml"));
-        assert!(result.is_err());
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("Invalid backend version"));
     }
 
     #[test]
@@ -1488,7 +1332,7 @@ name = "my-app"
 version = "0.1.0"
 
 [dependencies]
-nosource = { features = ["json"] }
+nosource = { }
 "#;
         let manifest: Manifest = toml::from_str(toml).unwrap();
         let result = manifest.validate(Path::new("mik.toml"));
@@ -1593,25 +1437,6 @@ registry = { registry = "", version = "1.0" }
     }
 
     #[test]
-    fn test_validate_nonexistent_feature() {
-        let toml = r#"
-[project]
-name = "my-app"
-version = "0.1.0"
-
-[features]
-default = []
-json = ["nonexistent"]
-"#;
-        let manifest: Manifest = toml::from_str(toml).unwrap();
-        let result = manifest.validate(Path::new("mik.toml"));
-        assert!(result.is_err());
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("non-existent feature"));
-        assert!(error.contains("nonexistent"));
-    }
-
-    #[test]
     fn test_validate_valid_manifest() {
         let temp_dir = TempDir::new().unwrap();
         let manifest_path = temp_dir.path().join("mik.toml");
@@ -1624,17 +1449,11 @@ json = ["nonexistent"]
 [project]
 name = "my-app"
 version = "0.1.0"
-backend = "2"
-type = "app"
 
 [server]
 port = 3000
 modules = "modules/"
 cache_size = 10
-
-[features]
-default = ["json"]
-json = []
 
 [dependencies]
 serde = "1.0"
@@ -1656,8 +1475,6 @@ registry = { registry = "ghcr.io/user/component", version = "1.0" }
 [project]
 name = "123-invalid"
 version = "1.0"
-type = "invalid"
-backend = "3"
 
 [server]
 port = 0
@@ -1675,7 +1492,7 @@ modules = ""
         assert!(error.contains("3."));
         assert!(error.contains("Invalid project name"));
         assert!(error.contains("Invalid version"));
-        assert!(error.contains("Invalid project type"));
+        assert!(error.contains("port cannot be 0"));
     }
 
     #[test]

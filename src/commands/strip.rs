@@ -41,10 +41,10 @@ impl Default for StripOptions {
 /// Get the path to wasm-tools, downloading if necessary
 fn get_wasm_tools() -> Result<PathBuf> {
     // First check if wasm-tools is in PATH
-    if let Ok(output) = Command::new("wasm-tools").arg("--version").output() {
-        if output.status.success() {
-            return Ok(PathBuf::from("wasm-tools"));
-        }
+    if let Ok(output) = Command::new("wasm-tools").arg("--version").output()
+        && output.status.success()
+    {
+        return Ok(PathBuf::from("wasm-tools"));
     }
 
     // Check if we have it in ~/.mik/bin/
@@ -63,7 +63,10 @@ fn get_wasm_tools() -> Result<PathBuf> {
     }
 
     // Download wasm-tools
-    println!("wasm-tools not found, downloading v{}...", WASM_TOOLS_VERSION);
+    println!(
+        "wasm-tools not found, downloading v{}...",
+        WASM_TOOLS_VERSION
+    );
     download_wasm_tools(&mik_bin)?;
 
     Ok(wasm_tools_path)
@@ -86,7 +89,8 @@ fn download_wasm_tools(bin_dir: &Path) -> Result<()> {
     // Download using ureq (already a dependency)
     #[cfg(feature = "registry")]
     {
-        let response = ureq::get(&url).call()
+        let response = ureq::get(&url)
+            .call()
             .context("Failed to download wasm-tools")?;
 
         let mut reader = response.into_body().into_reader();
@@ -154,7 +158,8 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
         let name = file.name();
 
         // Look for wasm-tools binary
-        if name.ends_with("wasm-tools.exe") || (name.ends_with("wasm-tools") && !name.contains('/')) {
+        if name.ends_with("wasm-tools.exe") || (name.ends_with("wasm-tools") && !name.contains('/'))
+        {
             let out_path = dest.join("wasm-tools.exe");
             let mut out_file = std::fs::File::create(&out_path)?;
             std::io::copy(&mut file, &mut out_file)?;
@@ -231,14 +236,16 @@ pub fn execute(input: &str, options: StripOptions) -> Result<()> {
     let output_path = match &options.output {
         Some(out) => out.clone(),
         None => {
-            let stem = input_path.file_stem()
+            let stem = input_path
+                .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("component");
             let parent = input_path.parent().unwrap_or(Path::new("."));
-            parent.join(format!("{}.stripped.wasm", stem))
+            parent
+                .join(format!("{}.stripped.wasm", stem))
                 .to_string_lossy()
                 .to_string()
-        }
+        },
     };
 
     // Build wasm-tools strip command
@@ -263,8 +270,7 @@ pub fn execute(input: &str, options: StripOptions) -> Result<()> {
     cmd.arg("-o").arg(&output_path);
 
     // Execute
-    let output = cmd.output()
-        .context("Failed to execute wasm-tools strip")?;
+    let output = cmd.output().context("Failed to execute wasm-tools strip")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

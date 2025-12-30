@@ -1,18 +1,11 @@
 [project]
 name = "hello-world"
 version = "0.1.0"
-backend = "2"
 description = "A WASI HTTP app"
-license = "MIT"
-keywords = []
-type = "app"
 
 [[project.authors]]
 name = "hlop3z"
 email = "23062270+hlop3z@users.noreply.github.com"
-
-[features]
-default = []
 
 [server]
 auto = true

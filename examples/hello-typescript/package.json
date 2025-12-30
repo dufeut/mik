@@ -1,0 +1,21 @@
+{
+  "name": "hello-typescript",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build:bundle": "esbuild src/component.ts --bundle --outfile=dist/component.js --format=esm --platform=neutral --external:wasi:*",
+    "build:wasm": "npx jco componentize dist/component.js --wit wit --world-name proxy -o hello-typescript.wasm",
+    "build": "npm run build:bundle && npm run build:wasm",
+    "clean": "rm -rf dist hello-typescript.wasm"
+  },
+  "keywords": ["wasi", "wasm", "typescript"],
+  "author": "",
+  "license": "MIT",
+  "description": "WASI HTTP handler in TypeScript",
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "^0.19.3",
+    "@bytecodealliance/jco": "^1.15.4",
+    "esbuild": "^0.27.2",
+    "typescript": "^5.9.3"
+  }
+}

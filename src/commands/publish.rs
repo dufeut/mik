@@ -33,7 +33,7 @@ const STATIC_DIRS: [&str; 6] = [
 const WIT_DIRS: [&str; 3] = ["wit", "WIT", "Wit"];
 
 /// Publish component to GitHub Releases.
-pub fn execute(tag: Option<&str>, _registry: Option<&str>, dry_run: bool) -> Result<()> {
+pub fn execute(tag: Option<&str>, dry_run: bool) -> Result<()> {
     let manifest = Manifest::load().context("No mik.toml found. Run 'mik init' first.")?;
     let name = &manifest.project.name;
     let version = tag.unwrap_or(&manifest.project.version);

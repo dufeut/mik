@@ -31,7 +31,7 @@
 //! └────────────────────────────────────────────────────────────┘
 //! ```
 
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -93,7 +93,6 @@ pub enum CircuitBreakerState {
 impl From<u8> for CircuitBreakerState {
     fn from(value: u8) -> Self {
         match value {
-            0 => Self::Closed,
             1 => Self::Open,
             2 => Self::HalfOpen,
             _ => Self::Closed,
@@ -141,14 +140,13 @@ impl CircuitBreaker {
         // Check if we should transition from Open to HalfOpen
         let current_state = CircuitBreakerState::from(self.state.load(Ordering::Acquire));
 
-        if current_state == CircuitBreakerState::Open {
-            if let Some(opened_at) = *self.opened_at.read() {
-                if opened_at.elapsed() >= self.config.timeout {
-                    // Transition to HalfOpen
-                    self.transition_to_half_open();
-                    return CircuitBreakerState::HalfOpen;
-                }
-            }
+        if current_state == CircuitBreakerState::Open
+            && let Some(opened_at) = *self.opened_at.read()
+            && opened_at.elapsed() >= self.config.timeout
+        {
+            // Transition to HalfOpen
+            self.transition_to_half_open();
+            return CircuitBreakerState::HalfOpen;
         }
 
         current_state
@@ -178,7 +176,7 @@ impl CircuitBreaker {
             CircuitBreakerState::Closed => {
                 // Reset failure count on success
                 self.failure_count.store(0, Ordering::Release);
-            }
+            },
             CircuitBreakerState::HalfOpen => {
                 // Increment success count
                 let successes = self.success_count.fetch_add(1, Ordering::AcqRel) + 1;
@@ -187,10 +185,10 @@ impl CircuitBreaker {
                 if successes >= self.config.success_threshold {
                     self.transition_to_closed();
                 }
-            }
+            },
             CircuitBreakerState::Open => {
                 // Shouldn't happen, but ignore
-            }
+            },
         }
     }
 
@@ -211,14 +209,14 @@ impl CircuitBreaker {
                 if failures >= self.config.failure_threshold {
                     self.transition_to_open();
                 }
-            }
+            },
             CircuitBreakerState::HalfOpen => {
                 // Any failure in half-open immediately opens the circuit
                 self.transition_to_open();
-            }
+            },
             CircuitBreakerState::Open => {
                 // Shouldn't happen, but ignore
-            }
+            },
         }
     }
 
@@ -453,7 +451,10 @@ mod tests {
         let cloned = cb.clone();
         assert_eq!(cloned.state(), cb.state());
         assert_eq!(cloned.failure_count(), cb.failure_count());
-        assert_eq!(cloned.config().failure_threshold, cb.config().failure_threshold);
+        assert_eq!(
+            cloned.config().failure_threshold,
+            cb.config().failure_threshold
+        );
     }
 
     #[test]

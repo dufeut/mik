@@ -10,9 +10,9 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::{http1, http2};
-use hyper_util::rt::TokioExecutor;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -108,9 +108,7 @@ impl ProxyService {
                         .await
                 } else {
                     // Use HTTP/1.1
-                    http1::Builder::new()
-                        .serve_connection(io, service)
-                        .await
+                    http1::Builder::new().serve_connection(io, service).await
                 };
 
                 if let Err(e) = result
@@ -148,14 +146,16 @@ impl ProxyService {
                     .status(StatusCode::SERVICE_UNAVAILABLE)
                     .body(Full::new(Bytes::from("No healthy backends available")))
                     .unwrap());
-            }
+            },
             SelectBackendResult::AllAtCapacity => {
                 warn!("All backends at connection capacity");
                 return Ok(Response::builder()
                     .status(StatusCode::SERVICE_UNAVAILABLE)
-                    .body(Full::new(Bytes::from("All backends at connection capacity")))
+                    .body(Full::new(Bytes::from(
+                        "All backends at connection capacity",
+                    )))
                     .unwrap());
-            }
+            },
         };
 
         // Track request timing
@@ -166,7 +166,8 @@ impl ProxyService {
         backend.start_request();
 
         // Update active connections metric
-        self.metrics.set_active_connections(&backend_addr, backend.active_requests());
+        self.metrics
+            .set_active_connections(&backend_addr, backend.active_requests());
 
         // Forward the request
         let result = self.forward_request(req, &backend).await;
@@ -175,7 +176,8 @@ impl ProxyService {
         backend.end_request();
 
         // Update active connections metric after request ends
-        self.metrics.set_active_connections(&backend_addr, backend.active_requests());
+        self.metrics
+            .set_active_connections(&backend_addr, backend.active_requests());
 
         // Calculate request duration
         let duration = start.elapsed().as_secs_f64();
@@ -205,7 +207,7 @@ impl ProxyService {
                 );
                 Ok(Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
-                    .body(Full::new(Bytes::from(format!("Backend error: {}", e))))
+                    .body(Full::new(Bytes::from(format!("Backend error: {e}"))))
                     .unwrap())
             },
         }
@@ -264,7 +266,9 @@ impl ProxyService {
     ) -> Result<Response<Full<Bytes>>> {
         let method = req.method().clone();
         let uri = req.uri().clone();
-        let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+        let path = uri
+            .path_and_query()
+            .map_or("/", hyper::http::uri::PathAndQuery::as_str);
 
         // Build the backend URL
         let backend_url = backend.url(path);
@@ -315,7 +319,7 @@ impl ProxyService {
         let mut builder = Response::builder().status(status);
 
         // Copy response headers (skip hop-by-hop headers)
-        for (name, value) in headers.iter() {
+        for (name, value) in &headers {
             let name_str = name.as_str().to_lowercase();
             if !is_hop_by_hop_header(&name_str) {
                 builder = builder.header(name, value);

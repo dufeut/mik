@@ -366,7 +366,7 @@ impl LoadBalancer {
         backends
             .iter()
             .find(|b| b.address() == address)
-            .map(|b| b.active_requests())
+            .map(backend::Backend::active_requests)
     }
 }
 
@@ -436,11 +436,8 @@ mod tests {
     fn test_load_balancer_config_from_manifest_defaults() {
         let lb_config = LbConfig::default();
 
-        let config = LoadBalancerConfig::from_manifest(
-            &lb_config,
-            "0.0.0.0:3000".parse().unwrap(),
-            vec![],
-        );
+        let config =
+            LoadBalancerConfig::from_manifest(&lb_config, "0.0.0.0:3000".parse().unwrap(), vec![]);
 
         assert_eq!(config.request_timeout, Duration::from_secs(30));
         assert_eq!(config.max_connections_per_backend, 100);
@@ -509,8 +506,7 @@ mod tests {
             assert_eq!(
                 config.health_check.check_type,
                 HealthCheckType::Tcp,
-                "Failed for health_check_type: {}",
-                health_check_type
+                "Failed for health_check_type: {health_check_type}"
             );
         }
     }

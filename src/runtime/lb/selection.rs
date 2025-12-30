@@ -107,7 +107,7 @@ impl WeightedRoundRobin {
     ///
     /// Creates a virtual index list where each backend appears proportionally
     /// to its weight.
-    fn compute_expanded_indices(weights: &[u32], indices: Vec<usize>) -> Vec<usize> {
+    fn compute_expanded_indices(weights: &[u32], indices: &[usize]) -> Vec<usize> {
         let mut expanded = Vec::new();
         for (i, &idx) in indices.iter().enumerate() {
             let weight = weights.get(idx).copied().unwrap_or(1) as usize;
@@ -147,7 +147,7 @@ impl Selection for WeightedRoundRobin {
         }
 
         // Build expanded indices for healthy backends only
-        let healthy_expanded = Self::compute_expanded_indices(&self.weights, healthy_indices.to_vec());
+        let healthy_expanded = Self::compute_expanded_indices(&self.weights, healthy_indices);
 
         if healthy_expanded.is_empty() {
             return None;
@@ -241,17 +241,14 @@ mod tests {
         // In 300 requests: backend 0 ~200, backend 1 ~100
         assert!(
             counts[0] > counts[1],
-            "Backend 0 (weight 2) should have more selections than backend 1 (weight 1): {:?}",
-            counts
+            "Backend 0 (weight 2) should have more selections than backend 1 (weight 1): {counts:?}"
         );
 
         // Allow some variance but the ratio should be roughly 2:1
         let ratio = counts[0] as f64 / counts[1] as f64;
         assert!(
             (1.5..2.5).contains(&ratio),
-            "Expected ratio ~2.0, got {}: {:?}",
-            ratio,
-            counts
+            "Expected ratio ~2.0, got {ratio}: {counts:?}"
         );
     }
 
@@ -271,9 +268,7 @@ mod tests {
         for (i, &count) in counts.iter().enumerate() {
             assert!(
                 (80..=120).contains(&count),
-                "Backend {} should have ~100 selections, got {}",
-                i,
-                count
+                "Backend {i} should have ~100 selections, got {count}"
             );
         }
     }
@@ -299,9 +294,7 @@ mod tests {
         let ratio = counts[0] as f64 / counts[2] as f64;
         assert!(
             (2.5..3.5).contains(&ratio),
-            "Expected ratio ~3.0, got {}: {:?}",
-            ratio,
-            counts
+            "Expected ratio ~3.0, got {ratio}: {counts:?}"
         );
     }
 
@@ -351,9 +344,7 @@ mod tests {
         let ratio = counts[0] as f64 / counts[1] as f64;
         assert!(
             (8.0..12.0).contains(&ratio),
-            "Expected ratio ~10.0, got {}: {:?}",
-            ratio,
-            counts
+            "Expected ratio ~10.0, got {ratio}: {counts:?}"
         );
     }
 
@@ -374,8 +365,7 @@ mod tests {
         // Backend 0: ~100, Backend 1: ~200, Backend 2: ~300
         assert!(
             counts[0] < counts[1] && counts[1] < counts[2],
-            "Counts should increase with weights: {:?}",
-            counts
+            "Counts should increase with weights: {counts:?}"
         );
 
         // Check approximate ratios
@@ -384,13 +374,11 @@ mod tests {
 
         assert!(
             (1.5..2.5).contains(&ratio_1_0),
-            "Expected ratio 1:0 ~2.0, got {}",
-            ratio_1_0
+            "Expected ratio 1:0 ~2.0, got {ratio_1_0}"
         );
         assert!(
             (2.5..3.5).contains(&ratio_2_0),
-            "Expected ratio 2:0 ~3.0, got {}",
-            ratio_2_0
+            "Expected ratio 2:0 ~3.0, got {ratio_2_0}"
         );
     }
 

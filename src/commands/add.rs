@@ -13,15 +13,12 @@ use crate::manifest::{Dependency, DependencyDetail, Manifest};
 use anyhow::{Context, Result};
 
 /// Add a dependency to the project.
-#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     packages: &[String],
     git: Option<&str>,
     path: Option<&str>,
-    _registry: Option<&str>, // Unused
     tag: Option<&str>,
     branch: Option<&str>,
-    features: &[String],
     dev: bool,
 ) -> Result<()> {
     if packages.is_empty() {
@@ -31,7 +28,7 @@ pub async fn execute(
     let mut manifest = Manifest::load().context("No mik.toml found. Run 'mik init' first.")?;
 
     for package in packages {
-        let (name, dep) = parse_and_create_dep(package, git, path, tag, branch, features)?;
+        let (name, dep) = parse_and_create_dep(package, git, path, tag, branch)?;
 
         let dep_type = if dev { "dev-dependency" } else { "dependency" };
 
@@ -63,7 +60,6 @@ fn parse_and_create_dep(
     path: Option<&str>,
     tag: Option<&str>,
     branch: Option<&str>,
-    features: &[String],
 ) -> Result<(String, Dependency)> {
     // Explicit --git flag
     if let Some(git_url) = git {
@@ -74,7 +70,6 @@ fn parse_and_create_dep(
                 git: Some(git_url.to_string()),
                 tag: tag.map(std::string::ToString::to_string),
                 branch: branch.map(std::string::ToString::to_string),
-                features: features.to_vec(),
                 ..Default::default()
             }),
         ));
@@ -90,7 +85,6 @@ fn parse_and_create_dep(
             name.to_string(),
             Dependency::Detailed(DependencyDetail {
                 path: Some(local_path.to_string()),
-                features: features.to_vec(),
                 ..Default::default()
             }),
         ));
@@ -104,7 +98,6 @@ fn parse_and_create_dep(
             name.to_string(),
             Dependency::Detailed(DependencyDetail {
                 registry: Some(package.to_string()),
-                features: features.to_vec(),
                 ..Default::default()
             }),
         ));
@@ -117,7 +110,6 @@ fn parse_and_create_dep(
             name,
             Dependency::Detailed(DependencyDetail {
                 registry: Some(oci_ref),
-                features: features.to_vec(),
                 ..Default::default()
             }),
         ));

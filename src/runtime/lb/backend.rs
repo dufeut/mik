@@ -311,8 +311,8 @@ impl Clone for Backend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::circuit_breaker::CircuitBreakerState;
+    use super::*;
 
     #[test]
     fn test_backend_new() {
@@ -561,24 +561,14 @@ mod tests {
 
         // With circuit breaker
         let config = CircuitBreakerConfig::new(5, 2, Duration::from_secs(60));
-        let backend = Backend::with_all_options(
-            "127.0.0.1:3001".to_string(),
-            2,
-            50,
-            Some(config),
-        );
+        let backend = Backend::with_all_options("127.0.0.1:3001".to_string(), 2, 50, Some(config));
 
         assert_eq!(backend.weight(), 2);
         assert_eq!(backend.max_connections(), 50);
         assert!(backend.circuit_breaker().is_some());
 
         // Without circuit breaker
-        let backend = Backend::with_all_options(
-            "127.0.0.1:3001".to_string(),
-            3,
-            100,
-            None,
-        );
+        let backend = Backend::with_all_options("127.0.0.1:3001".to_string(), 3, 100, None);
 
         assert_eq!(backend.weight(), 3);
         assert_eq!(backend.max_connections(), 100);

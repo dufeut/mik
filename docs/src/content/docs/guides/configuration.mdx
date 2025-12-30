@@ -12,8 +12,6 @@ mik is configured via `mik.toml` in your project root.
 name = "my-service"
 version = "0.1.0"
 description = "My WASI HTTP service"
-type = "app"              # "app" or "lib"
-backend = "2"             # WASI Preview 2
 
 [server]
 port = 3000
@@ -42,8 +40,6 @@ utils = { path = "../utils" }
 | `name` | string | required | Project name (used for WASM output) |
 | `version` | string | `"0.1.0"` | Semantic version |
 | `description` | string | - | Project description |
-| `type` | string | `"app"` | `"app"` (HTTP handler) or `"lib"` (reusable) |
-| `backend` | string | `"2"` | WASI version (`"1"` or `"2"`) |
 
 ## [server] Section
 

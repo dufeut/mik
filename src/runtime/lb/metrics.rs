@@ -37,14 +37,8 @@ pub fn register_lb_metrics() {
         );
 
         // Backend metrics
-        describe_gauge!(
-            "mik_lb_backends_healthy",
-            "Number of healthy backends"
-        );
-        describe_gauge!(
-            "mik_lb_backends_total",
-            "Total number of backends"
-        );
+        describe_gauge!("mik_lb_backends_healthy", "Number of healthy backends");
+        describe_gauge!("mik_lb_backends_total", "Total number of backends");
         describe_gauge!(
             "mik_lb_active_connections",
             "Active connections per backend"
@@ -167,10 +161,7 @@ impl LbMetrics {
     /// # Arguments
     ///
     /// * `backends` - Iterator of (address, is_healthy, active_connections) tuples
-    pub fn update_backend_metrics<'a>(
-        &self,
-        backends: impl Iterator<Item = (&'a str, bool, u64)>,
-    ) {
+    pub fn update_backend_metrics<'a>(&self, backends: impl Iterator<Item = (&'a str, bool, u64)>) {
         let mut total = 0usize;
         let mut healthy = 0usize;
 
@@ -200,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_lb_metrics_default() {
-        let metrics = LbMetrics::default();
+        let metrics = LbMetrics;
         // Just verify it doesn't panic
         metrics.set_backends_total(3);
         metrics.set_backends_healthy(2);
@@ -244,14 +235,16 @@ mod tests {
     fn test_update_backend_metrics() {
         let metrics = LbMetrics::new();
 
-        let backends = vec![
+        let backends = [
             ("127.0.0.1:3001", true, 10u64),
             ("127.0.0.1:3002", false, 0u64),
             ("127.0.0.1:3003", true, 5u64),
         ];
 
         metrics.update_backend_metrics(
-            backends.iter().map(|(addr, healthy, conn)| (*addr, *healthy, *conn))
+            backends
+                .iter()
+                .map(|(addr, healthy, conn)| (*addr, *healthy, *conn)),
         );
     }
 

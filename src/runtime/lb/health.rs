@@ -9,8 +9,8 @@ use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-use super::metrics::LbMetrics;
 use super::Backend;
+use super::metrics::LbMetrics;
 
 /// Type of health check to perform.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,15 +100,13 @@ impl HealthCheck {
     pub(super) fn new(config: HealthCheckConfig) -> Self {
         // Only create HTTP client if we're doing HTTP health checks
         let client = match &config.check_type {
-            HealthCheckType::Http { .. } => {
-                Some(
-                    reqwest::Client::builder()
-                        .timeout(config.timeout)
-                        .pool_max_idle_per_host(1)
-                        .build()
-                        .expect("Failed to create health check client"),
-                )
-            }
+            HealthCheckType::Http { .. } => Some(
+                reqwest::Client::builder()
+                    .timeout(config.timeout)
+                    .pool_max_idle_per_host(1)
+                    .build()
+                    .expect("Failed to create health check client"),
+            ),
             HealthCheckType::Tcp => None,
         };
 
@@ -125,7 +123,10 @@ impl HealthCheck {
 
     /// Perform an HTTP health check.
     async fn check_http(&self, backend: &Backend, path: &str) -> bool {
-        let client = self.client.as_ref().expect("HTTP client should exist for HTTP health checks");
+        let client = self
+            .client
+            .as_ref()
+            .expect("HTTP client should exist for HTTP health checks");
         let url = backend.url(path);
 
         match client.get(&url).send().await {
@@ -141,7 +142,7 @@ impl HealthCheck {
                     );
                 }
                 healthy
-            }
+            },
             Err(e) => {
                 debug!(
                     backend = %backend.address(),
@@ -149,7 +150,7 @@ impl HealthCheck {
                     "HTTP health check failed"
                 );
                 false
-            }
+            },
         }
     }
 
@@ -159,9 +160,10 @@ impl HealthCheck {
 
         // Resolve the address to a SocketAddr
         let socket_addr = match address.to_socket_addrs() {
-            Ok(mut addrs) => match addrs.next() {
-                Some(addr) => addr,
-                None => {
+            Ok(mut addrs) => {
+                if let Some(addr) = addrs.next() {
+                    addr
+                } else {
                     debug!(
                         backend = %address,
                         "TCP health check failed: no addresses resolved"
@@ -176,7 +178,7 @@ impl HealthCheck {
                     "TCP health check failed: address resolution error"
                 );
                 return false;
-            }
+            },
         };
 
         // Attempt TCP connection with timeout
@@ -184,7 +186,7 @@ impl HealthCheck {
             Ok(Ok(_stream)) => {
                 debug!(backend = %address, "TCP health check passed");
                 true
-            }
+            },
             Ok(Err(e)) => {
                 debug!(
                     backend = %address,
@@ -192,7 +194,7 @@ impl HealthCheck {
                     "TCP health check failed: connection error"
                 );
                 false
-            }
+            },
             Err(_) => {
                 debug!(
                     backend = %address,
@@ -200,13 +202,16 @@ impl HealthCheck {
                     "TCP health check failed: connection timeout"
                 );
                 false
-            }
+            },
         }
     }
 }
 
 /// Run continuous health checks for all backends.
-pub(super) async fn run_health_checks(backends: Arc<RwLock<Vec<Backend>>>, config: HealthCheckConfig) {
+pub(super) async fn run_health_checks(
+    backends: Arc<RwLock<Vec<Backend>>>,
+    config: HealthCheckConfig,
+) {
     let health_check = HealthCheck::new(config.clone());
     let metrics = LbMetrics::new();
     let mut interval = tokio::time::interval(config.interval);
@@ -219,14 +224,14 @@ pub(super) async fn run_health_checks(backends: Arc<RwLock<Vec<Backend>>>, confi
                 check_type = "HTTP",
                 "Starting health check loop"
             );
-        }
+        },
         HealthCheckType::Tcp => {
             info!(
                 interval = ?config.interval,
                 check_type = "TCP",
                 "Starting health check loop"
             );
-        }
+        },
     }
 
     loop {
@@ -281,9 +286,9 @@ pub(super) async fn run_health_checks(backends: Arc<RwLock<Vec<Backend>>>, confi
 
         // Update backend health metrics after each health check cycle
         metrics.update_backend_metrics(
-            backends_snapshot.iter().map(|b| {
-                (b.address(), b.is_healthy(), b.active_requests())
-            })
+            backends_snapshot
+                .iter()
+                .map(|b| (b.address(), b.is_healthy(), b.active_requests())),
         );
     }
 }
@@ -385,7 +390,10 @@ mod tests {
 
         // Health check should pass
         let result = health_check.check(&backend).await;
-        assert!(result, "TCP health check should pass when port is accepting connections");
+        assert!(
+            result,
+            "TCP health check should pass when port is accepting connections"
+        );
     }
 
     #[tokio::test]
@@ -443,8 +451,7 @@ mod tests {
         // Allow some margin for the timeout check
         assert!(
             elapsed < Duration::from_millis(200),
-            "TCP health check should respect timeout (elapsed: {:?})",
-            elapsed
+            "TCP health check should respect timeout (elapsed: {elapsed:?})"
         );
     }
 }

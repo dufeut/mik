@@ -28,11 +28,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{RwLock, watch};
 use tracing::{debug, info, warn};
 
-use super::backend::Backend;
 use super::RoundRobin;
+use super::backend::Backend;
 
 /// Configuration for graceful reload operations.
 #[derive(Debug, Clone)]
@@ -190,10 +190,10 @@ impl ReloadManager {
             // Find backends to drain (in current but not in new)
             for backend in current_backends.iter() {
                 let addr = backend.address().to_string();
-                if !new_addresses.contains(&addr) {
-                    draining.push(backend.clone());
-                } else {
+                if new_addresses.contains(&addr) {
                     unchanged.push(backend.clone());
+                } else {
+                    draining.push(backend.clone());
                 }
             }
         }
@@ -229,7 +229,8 @@ impl ReloadManager {
         }
 
         // Collect unchanged addresses before moving the vector
-        let unchanged_addrs: Vec<String> = unchanged.iter().map(|b| b.address().to_string()).collect();
+        let unchanged_addrs: Vec<String> =
+            unchanged.iter().map(|b| b.address().to_string()).collect();
 
         // Update the backend list (add new ones, keep unchanged, mark draining as unhealthy)
         {
@@ -405,7 +406,10 @@ impl ReloadManager {
     pub async fn remove_backend(&self, address: &str) -> bool {
         let backend = {
             let backends_read = self.backends.read().await;
-            backends_read.iter().find(|b| b.address() == address).cloned()
+            backends_read
+                .iter()
+                .find(|b| b.address() == address)
+                .cloned()
         };
 
         let Some(backend) = backend else {
@@ -564,7 +568,11 @@ mod tests {
         // Verify it was added
         let backends_read = backends.read().await;
         assert_eq!(backends_read.len(), 2);
-        assert!(backends_read.iter().any(|b| b.address() == "127.0.0.1:3002"));
+        assert!(
+            backends_read
+                .iter()
+                .any(|b| b.address() == "127.0.0.1:3002")
+        );
 
         // Adding the same backend again should fail
         drop(backends_read);
@@ -608,7 +616,11 @@ mod tests {
         // Verify it was removed
         let backends_read = backends.read().await;
         assert_eq!(backends_read.len(), 1);
-        assert!(!backends_read.iter().any(|b| b.address() == "127.0.0.1:3001"));
+        assert!(
+            !backends_read
+                .iter()
+                .any(|b| b.address() == "127.0.0.1:3001")
+        );
     }
 
     #[tokio::test]
@@ -666,7 +678,11 @@ mod tests {
         // Verify it was removed immediately
         let backends_read = backends.read().await;
         assert_eq!(backends_read.len(), 1);
-        assert!(!backends_read.iter().any(|b| b.address() == "127.0.0.1:3001"));
+        assert!(
+            !backends_read
+                .iter()
+                .any(|b| b.address() == "127.0.0.1:3001")
+        );
     }
 
     #[tokio::test]
@@ -718,7 +734,10 @@ mod tests {
         assert_eq!(backends_read.len(), 2);
 
         // The draining backend should be unhealthy
-        let draining = backends_read.iter().find(|b| b.address() == "127.0.0.1:3002").unwrap();
+        let draining = backends_read
+            .iter()
+            .find(|b| b.address() == "127.0.0.1:3002")
+            .unwrap();
         assert!(!draining.is_healthy());
     }
 

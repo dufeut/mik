@@ -34,7 +34,7 @@ COMMON WORKFLOWS:
   mik publish --tag v1.0.0
 
 EXAMPLES:
-  mik new my-api --lib              Create library component
+  mik new my-service                Create new project
   mik add user/router:v2.0          Add versioned dependency
   mik build -rc                     Release build with composition
   mik run                           Run on port 3000
@@ -178,16 +178,28 @@ enum Commands {
     // =========================================================================
     /// Create a new mik project
     ///
-    /// Scaffolds a complete project with Cargo.toml, mik.toml, WIT files,
-    /// and a hello world handler ready to build and run.
+    /// Scaffolds a project from templates supporting multiple languages:
+    /// Rust (default) and TypeScript.
     ///
     /// Examples:
-    ///   mik new my-service          # Create new project
-    ///   mik new my-lib --lib        # Create library component
+    ///   mik new my-service                    # Interactive mode
+    ///   mik new my-service -y                 # Use defaults (Rust + basic)
+    ///   mik new my-service --lang typescript  # TypeScript project
+    ///   mik new my-api --lang rust --template rest-api
+    ///   mik new my-service --template github:user/repo
     New {
         /// Project name (creates directory with this name)
         name: String,
-        /// Mark as library component
+        /// Target language: rust, typescript (ts)
+        #[arg(long, short = 'l')]
+        lang: Option<String>,
+        /// Template: basic (default), rest-api (Rust only), or github:user/repo
+        #[arg(long, short = 't')]
+        template: Option<String>,
+        /// Skip interactive prompts, use defaults
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Create as library component (Rust only)
         #[arg(long)]
         lib: bool,
     },
@@ -214,18 +226,12 @@ enum Commands {
         /// Add from local path
         #[arg(long)]
         path: Option<String>,
-        /// Registry URL (unused - GitHub is the registry)
-        #[arg(long, hide = true)]
-        registry: Option<String>,
         /// Git tag
         #[arg(long)]
         tag: Option<String>,
         /// Git branch
         #[arg(long)]
         branch: Option<String>,
-        /// Features to enable
-        #[arg(short = 'F', long)]
-        features: Vec<String>,
         /// Add as dev dependency
         #[arg(short = 'D', long)]
         dev: bool,
@@ -248,13 +254,15 @@ enum Commands {
     },
     /// Build the component with cargo-component
     ///
-    /// Compiles Rust to WASM component targeting wasm32-wasip2.
+    /// Compiles to WASM component targeting wasm32-wasip2.
+    /// Supports multiple languages: Rust (default) and TypeScript.
     /// Optionally composes all dependencies using WAC.
     ///
     /// Examples:
-    ///   mik build                   # Debug build
+    ///   mik build                   # Build (language from mik.toml or Rust)
     ///   mik build --release         # Optimized build
     ///   mik build -rc               # Release + compose dependencies
+    ///   mik build --lang ts         # Build TypeScript project
     Build {
         /// Build in release mode
         #[arg(short, long)]
@@ -262,6 +270,9 @@ enum Commands {
         /// Compose all dependencies after build
         #[arg(short, long)]
         compose: bool,
+        /// Language override: rust, typescript (ts)
+        #[arg(long, short = 'l', value_parser = ["rust", "rs", "typescript", "ts"])]
+        lang: Option<String>,
     },
     /// Run the component with local development server
     ///
@@ -314,9 +325,6 @@ enum Commands {
         /// Version tag (default: from mik.toml)
         #[arg(long)]
         tag: Option<String>,
-        /// Target registry (default: ghcr.io)
-        #[arg(long)]
-        registry: Option<String>,
         /// Show what would be published without pushing
         #[arg(long)]
         dry_run: bool,
@@ -469,28 +477,63 @@ async fn main() -> Result<()> {
         },
 
         // Build commands
-        Commands::New { name, lib } => {
-            commands::new::execute(&name, lib)?;
+        Commands::New {
+            name,
+            lang,
+            template,
+            yes,
+            lib,
+        } => {
+            use commands::new::{Language, NewOptions, Template};
+
+            // Parse language
+            let lang = lang
+                .as_deref()
+                .and_then(Language::from_str)
+                .unwrap_or_default();
+
+            // Check for GitHub template
+            let github_template = template
+                .as_ref()
+                .filter(|t| t.starts_with("github:") || t.contains('/'))
+                .cloned();
+
+            // Parse template (if not GitHub)
+            let template = if github_template.is_none() {
+                template
+                    .as_deref()
+                    .and_then(Template::from_str)
+                    .unwrap_or_default()
+            } else {
+                Template::default()
+            };
+
+            let options = NewOptions {
+                name,
+                lang,
+                template,
+                yes,
+                lib,
+                github_template,
+            };
+
+            commands::new::execute(options)?;
         },
         #[cfg(feature = "registry")]
         Commands::Add {
             packages,
             git,
             path,
-            registry,
             tag,
             branch,
-            features,
             dev,
         } => {
             commands::add::execute(
                 &packages,
                 git.as_deref(),
                 path.as_deref(),
-                registry.as_deref(),
                 tag.as_deref(),
                 branch.as_deref(),
-                &features,
                 dev,
             )
             .await?;
@@ -499,8 +542,12 @@ async fn main() -> Result<()> {
         Commands::Remove { packages, dev } => {
             commands::add::remove(&packages, dev)?;
         },
-        Commands::Build { release, compose } => {
-            commands::build::execute(release, compose).await?;
+        Commands::Build {
+            release,
+            compose,
+            lang,
+        } => {
+            commands::build::execute(release, compose, lang).await?;
         },
         Commands::Run {
             component,
@@ -512,12 +559,8 @@ async fn main() -> Result<()> {
             commands::run::execute(component.as_deref(), workers, port, local, lb).await?;
         },
         #[cfg(feature = "registry")]
-        Commands::Publish {
-            tag,
-            registry,
-            dry_run,
-        } => {
-            commands::publish::execute(tag.as_deref(), registry.as_deref(), dry_run)?;
+        Commands::Publish { tag, dry_run } => {
+            commands::publish::execute(tag.as_deref(), dry_run)?;
         },
         #[cfg(feature = "registry")]
         Commands::Sync => {
