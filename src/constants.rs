@@ -60,10 +60,24 @@ pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1000;
 pub const DEFAULT_MAX_PER_MODULE_REQUESTS: usize = 10;
 
 /// Circuit breaker failure threshold before opening.
+/// Rationale: 5 consecutive failures indicates a real problem, not transient.
 pub const CIRCUIT_BREAKER_FAILURE_THRESHOLD: u32 = 5;
 
+/// Circuit breaker success threshold before closing from half-open.
+/// Rationale: 2 successes confirms the service has recovered.
+pub const CIRCUIT_BREAKER_SUCCESS_THRESHOLD: u32 = 2;
+
+/// Circuit breaker timeout before transitioning to half-open (30 seconds).
+/// Rationale: Long enough to allow transient issues to resolve.
+pub const CIRCUIT_BREAKER_TIMEOUT_SECS: u64 = 30;
+
 /// Circuit breaker recovery timeout (60 seconds).
+/// Rationale: Matches typical service restart time.
 pub const CIRCUIT_BREAKER_RECOVERY_SECS: u64 = 60;
+
+/// Probe timeout for half-open circuit breaker state (10 milliseconds in tests).
+/// Used only in tests for faster execution.
+pub const CIRCUIT_BREAKER_PROBE_TIMEOUT_MILLIS: u64 = 10;
 
 /// Default server port.
 pub const DEFAULT_PORT: u16 = 3000;

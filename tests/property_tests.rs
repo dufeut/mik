@@ -17,23 +17,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 // ============================================================================
-// Include the modules under test directly (binary crate, not library)
+// Import from the library crate
 // ============================================================================
 
-// Re-export constants module for circuit_breaker to access
-#[path = "../src/constants.rs"]
-mod constants;
-
-// Include security module from runtime
-#[path = "../src/runtime/security.rs"]
-mod security;
-
-// Include circuit breaker from reliability
-#[path = "../src/reliability/circuit_breaker.rs"]
-mod circuit_breaker;
-
-use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
-use security::{
+use mik::reliability::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+use mik::runtime::security::{
     ModuleNameError, PathTraversalError, sanitize_file_path, sanitize_module_name,
     validate_windows_path,
 };
