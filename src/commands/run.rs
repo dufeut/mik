@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::process::{Child, Command};
 
-use crate::manifest::TracingConfig;
+use crate::manifest::{Manifest, TracingConfig};
 use crate::runtime::HostBuilder;
 use crate::runtime::lb::{LoadBalancer, LoadBalancerConfig};
 
@@ -116,30 +116,9 @@ async fn run_multi_worker(
     local_only: bool,
 ) -> Result<()> {
     // Get base port from override, mik.toml, or default
-    let base_port = port_override.unwrap_or_else(|| {
-        if Path::new("mik.toml").exists()
-            && let Ok(content) = std::fs::read_to_string("mik.toml")
-        {
-            #[derive(serde::Deserialize, Default)]
-            struct PartialManifest {
-                #[serde(default)]
-                server: ServerConfig,
-            }
-            #[derive(serde::Deserialize, Default)]
-            struct ServerConfig {
-                #[serde(default = "default_port")]
-                port: u16,
-            }
-            fn default_port() -> u16 {
-                3000
-            }
-
-            if let Ok(manifest) = toml::from_str::<PartialManifest>(&content) {
-                return manifest.server.port;
-            }
-        }
-        3000
-    });
+    let base_port = port_override
+        .or_else(Manifest::load_port)
+        .unwrap_or(crate::constants::DEFAULT_PORT);
 
     println!("Starting {} workers...\n", workers);
 
@@ -225,30 +204,9 @@ async fn run_with_lb(
     local_only: bool,
 ) -> Result<()> {
     // Get base port from override, mik.toml, or default
-    let base_port = port_override.unwrap_or_else(|| {
-        if Path::new("mik.toml").exists()
-            && let Ok(content) = std::fs::read_to_string("mik.toml")
-        {
-            #[derive(serde::Deserialize, Default)]
-            struct PartialManifest {
-                #[serde(default)]
-                server: ServerConfig,
-            }
-            #[derive(serde::Deserialize, Default)]
-            struct ServerConfig {
-                #[serde(default = "default_port")]
-                port: u16,
-            }
-            fn default_port() -> u16 {
-                3000
-            }
-
-            if let Ok(manifest) = toml::from_str::<PartialManifest>(&content) {
-                return manifest.server.port;
-            }
-        }
-        3000
-    });
+    let base_port = port_override
+        .or_else(Manifest::load_port)
+        .unwrap_or(crate::constants::DEFAULT_PORT);
 
     println!(
         "Starting {} workers with integrated L7 load balancer...\n",
@@ -446,21 +404,7 @@ async fn run_single_instance(
 
 /// Load tracing configuration from mik.toml if present.
 fn load_tracing_config() -> TracingConfig {
-    if Path::new("mik.toml").exists()
-        && let Ok(content) = std::fs::read_to_string("mik.toml")
-    {
-        // Parse just the tracing section
-        #[derive(serde::Deserialize, Default)]
-        struct PartialManifest {
-            #[serde(default)]
-            tracing: TracingConfig,
-        }
-
-        if let Ok(manifest) = toml::from_str::<PartialManifest>(&content) {
-            return manifest.tracing;
-        }
-    }
-    TracingConfig::default()
+    Manifest::load_tracing_config().unwrap_or_default()
 }
 
 /// Initialize tracing/logging based on configuration.
