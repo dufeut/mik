@@ -1,3 +1,19 @@
+//! CLI command implementations for mik.
+//!
+//! This module contains all the CLI command handlers that power the mik CLI.
+//! Each submodule implements a specific command:
+//!
+//! - [`new`] - Project scaffolding and template generation
+//! - [`build`] - WASM component compilation and composition
+//! - [`run`] - Development server for local testing
+//! - [`daemon`] - Background process management (up/down/ps/logs)
+//! - [`add`] - Dependency management (OCI/git/path)
+//! - [`publish`] - Push components to OCI registries
+//! - [`pull`] - Pull components from registries
+//! - [`cache`] - AOT cache management
+//! - [`strip`] - WASM binary size reduction
+//! - [`static_cmd`] - Static file serving configuration
+
 #[cfg(feature = "registry")]
 pub mod add;
 pub mod build;

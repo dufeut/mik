@@ -1,3 +1,16 @@
+//! Configuration types for the mik runtime.
+//!
+//! This module provides configuration structs for loading and validating
+//! mik project settings from TOML files. It includes:
+//!
+//! - [`Config`] - Root configuration struct
+//! - [`ServerConfig`] - HTTP server settings
+//! - [`Package`] - Project metadata
+//! - [`RouteConfig`] - URL routing rules
+//!
+//! All configuration types support serde deserialization and provide
+//! sensible defaults suitable for development use.
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;

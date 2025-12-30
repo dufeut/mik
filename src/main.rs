@@ -1,3 +1,15 @@
+//! mik - Package Manager and Runtime for WASI HTTP Components.
+//!
+//! This is the main entry point for the mik CLI. It provides commands for:
+//!
+//! - Creating new projects (`mik new`)
+//! - Building WASM components (`mik build`)
+//! - Running development servers (`mik run`)
+//! - Managing background instances (`mik daemon`, `mik up`, `mik down`)
+//! - Publishing to OCI registries (`mik publish`, `mik pull`)
+//!
+//! See `mik --help` for full usage information.
+
 // Use mimalloc for better multi-core performance (especially important for musl builds)
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
