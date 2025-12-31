@@ -246,13 +246,13 @@ impl GitRef {
     /// Extract git ref from dependency detail.
     fn from_detail(detail: &crate::manifest::DependencyDetail) -> Self {
         if let Some(branch) = &detail.branch {
-            GitRef::Branch(branch.clone())
+            Self::Branch(branch.clone())
         } else if let Some(tag) = &detail.tag {
-            GitRef::Tag(tag.clone())
+            Self::Tag(tag.clone())
         } else if let Some(rev) = &detail.rev {
-            GitRef::Rev(rev.clone())
+            Self::Rev(rev.clone())
         } else {
-            GitRef::Default
+            Self::Default
         }
     }
 }

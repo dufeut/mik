@@ -35,17 +35,17 @@ impl PartialEq for CircuitState {
         matches!(
             (self, other),
             (
-                CircuitState::Closed { failure_count: a },
-                CircuitState::Closed { failure_count: b }
+                Self::Closed { failure_count: a },
+                Self::Closed { failure_count: b }
             ) if a == b
         ) || matches!(
             (self, other),
-            (CircuitState::HalfOpen { .. }, CircuitState::HalfOpen { .. })
+            (Self::HalfOpen { .. }, Self::HalfOpen { .. })
         ) || matches!(
             (self, other),
             (
-                CircuitState::Open { failure_count: a, .. },
-                CircuitState::Open { failure_count: b, .. }
+                Self::Open { failure_count: a, .. },
+                Self::Open { failure_count: b, .. }
             ) if a == b
         )
     }

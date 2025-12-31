@@ -88,7 +88,7 @@ impl AotCache {
     }
 
     /// Check if the cache is in bypass mode.
-    pub fn is_bypass(&self) -> bool {
+    pub const fn is_bypass(&self) -> bool {
         self.config.bypass
     }
 

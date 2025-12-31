@@ -579,17 +579,13 @@ pub(crate) fn error_response(err: &Error) -> Result<Response<Full<Bytes>>> {
 impl From<&Error> for ErrorCategory {
     fn from(err: &Error) -> Self {
         match err {
-            Error::ModuleNotFound { .. } | Error::ModuleLoadFailed { .. } => {
-                ErrorCategory::ModuleLoad
-            },
-            Error::ExecutionTimeout { .. } => ErrorCategory::Timeout,
-            Error::PathTraversal { .. } | Error::InvalidRequest(_) => ErrorCategory::InvalidRequest,
-            Error::ScriptNotFound { .. } | Error::ScriptError { .. } => ErrorCategory::Script,
-            Error::CircuitBreakerOpen { .. } | Error::RateLimitExceeded { .. } => {
-                ErrorCategory::Reliability
-            },
-            Error::MemoryLimitExceeded { .. } => ErrorCategory::Execution,
-            _ => ErrorCategory::Internal,
+            Error::ModuleNotFound { .. } | Error::ModuleLoadFailed { .. } => Self::ModuleLoad,
+            Error::ExecutionTimeout { .. } => Self::Timeout,
+            Error::PathTraversal { .. } | Error::InvalidRequest(_) => Self::InvalidRequest,
+            Error::ScriptNotFound { .. } | Error::ScriptError { .. } => Self::Script,
+            Error::CircuitBreakerOpen { .. } | Error::RateLimitExceeded { .. } => Self::Reliability,
+            Error::MemoryLimitExceeded { .. } => Self::Execution,
+            _ => Self::Internal,
         }
     }
 }

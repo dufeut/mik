@@ -28,11 +28,11 @@ pub enum ServiceType {
 impl std::fmt::Display for ServiceType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ServiceType::Kv => write!(f, "kv"),
-            ServiceType::Sql => write!(f, "sql"),
-            ServiceType::Storage => write!(f, "storage"),
-            ServiceType::Queue => write!(f, "queue"),
-            ServiceType::Custom(name) => write!(f, "custom:{name}"),
+            Self::Kv => write!(f, "kv"),
+            Self::Sql => write!(f, "sql"),
+            Self::Storage => write!(f, "storage"),
+            Self::Queue => write!(f, "queue"),
+            Self::Custom(name) => write!(f, "custom:{name}"),
         }
     }
 }

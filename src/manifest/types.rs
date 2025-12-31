@@ -404,12 +404,12 @@ pub struct DependencyDetail {
 impl Dependency {
     /// Create a simple version dependency.
     pub fn version(version: &str) -> Self {
-        Dependency::Simple(version.to_string())
+        Self::Simple(version.to_string())
     }
 
     /// Create a git dependency.
     pub fn git(url: &str) -> Self {
-        Dependency::Detailed(DependencyDetail {
+        Self::Detailed(DependencyDetail {
             git: Some(url.to_string()),
             ..Default::default()
         })
@@ -417,7 +417,7 @@ impl Dependency {
 
     /// Create a registry dependency (ghcr.io, etc).
     pub fn registry(registry: &str, version: &str) -> Self {
-        Dependency::Detailed(DependencyDetail {
+        Self::Detailed(DependencyDetail {
             registry: Some(registry.to_string()),
             version: Some(version.to_string()),
             ..Default::default()
@@ -426,7 +426,7 @@ impl Dependency {
 
     /// Create a path dependency.
     pub fn path(path: &str) -> Self {
-        Dependency::Detailed(DependencyDetail {
+        Self::Detailed(DependencyDetail {
             path: Some(path.to_string()),
             ..Default::default()
         })

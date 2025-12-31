@@ -742,10 +742,10 @@ pub(crate) enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::Conflict(msg) => (StatusCode::CONFLICT, msg),
+            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
         (status, Json(ErrorResponse { error: message })).into_response()
@@ -754,13 +754,13 @@ impl IntoResponse for AppError {
 
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
-        AppError::Internal(err.to_string())
+        Self::Internal(err.to_string())
     }
 }
 
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self {
-        AppError::Internal(err.to_string())
+        Self::Internal(err.to_string())
     }
 }
 
@@ -769,10 +769,10 @@ impl From<daemon_error::Error> for AppError {
         let status = err.status_code();
         let message = err.to_string();
         match status {
-            404 => AppError::NotFound(message),
-            400 => AppError::BadRequest(message),
-            409 => AppError::Conflict(message),
-            _ => AppError::Internal(message),
+            404 => Self::NotFound(message),
+            400 => Self::BadRequest(message),
+            409 => Self::Conflict(message),
+            _ => Self::Internal(message),
         }
     }
 }

@@ -61,11 +61,11 @@ pub enum Value {
 impl From<ValueRef<'_>> for Value {
     fn from(value_ref: ValueRef<'_>) -> Self {
         match value_ref {
-            ValueRef::Null => Value::Null,
-            ValueRef::Integer(i) => Value::Integer(i),
-            ValueRef::Real(r) => Value::Real(r),
-            ValueRef::Text(t) => Value::Text(String::from_utf8_lossy(t).to_string()),
-            ValueRef::Blob(b) => Value::Blob(b.to_vec()),
+            ValueRef::Null => Self::Null,
+            ValueRef::Integer(i) => Self::Integer(i),
+            ValueRef::Real(r) => Self::Real(r),
+            ValueRef::Text(t) => Self::Text(String::from_utf8_lossy(t).to_string()),
+            ValueRef::Blob(b) => Self::Blob(b.to_vec()),
         }
     }
 }
