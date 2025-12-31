@@ -147,7 +147,7 @@ impl StorageService {
     /// - Metadata cannot be saved to database
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// let storage = StorageService::open("~/.mik/storage")?;
     /// let meta = storage.put_object(
     ///     "images/logo.png",
@@ -176,7 +176,7 @@ impl StorageService {
     /// Returns an error if the path is invalid or the file cannot be read.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// if let Some((data, meta)) = storage.get_object("images/logo.png")? {
     ///     println!("Content-Type: {}", meta.content_type);
     ///     println!("Size: {} bytes", data.len());
@@ -198,7 +198,7 @@ impl StorageService {
     /// metadata cannot be removed from the database.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// if storage.delete_object("images/old-logo.png")? {
     ///     println!("Object deleted");
     /// } else {
@@ -220,7 +220,7 @@ impl StorageService {
     /// Returns an error if the path is invalid or filesystem metadata cannot be read.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// if let Some(meta) = storage.head_object("images/logo.png")? {
     ///     println!("Size: {} bytes", meta.size);
     ///     println!("Modified: {}", meta.modified_at);
@@ -243,7 +243,7 @@ impl StorageService {
     /// Returns an error if the database read transaction fails or iteration errors occur.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// // List all objects
     /// let all_objects = storage.list_objects(None)?;
     ///

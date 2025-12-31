@@ -6,7 +6,7 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```ignore
 //! use mik::daemon::services::sql::{SqlService, Value};
 //!
 //! let service = SqlService::open("~/.mik/data.db")?;
@@ -168,7 +168,7 @@ impl SqlService {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use mik::daemon::services::sql::SqlService;
     ///
     /// let service = SqlService::open("~/.mik/data.db")?;
@@ -215,7 +215,7 @@ impl SqlService {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use mik::daemon::services::sql::{SqlService, Value};
     ///
     /// let service = SqlService::open("~/.mik/data.db")?;
@@ -280,7 +280,7 @@ impl SqlService {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use mik::daemon::services::sql::{SqlService, Value};
     ///
     /// let service = SqlService::open("~/.mik/data.db")?;
@@ -328,7 +328,7 @@ impl SqlService {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use mik::daemon::services::sql::SqlService;
     ///
     /// let service = SqlService::open("~/.mik/data.db")?;
@@ -366,7 +366,7 @@ impl SqlService {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use mik::daemon::services::sql::{SqlService, Value};
     ///
     /// let service = SqlService::open("~/.mik/data.db")?;

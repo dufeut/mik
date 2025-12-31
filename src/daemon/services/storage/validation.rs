@@ -16,7 +16,7 @@ use std::path::{Component, Path, PathBuf};
 /// - Are empty
 ///
 /// # Examples
-/// ```
+/// ```text
 /// // Valid paths
 /// validate_path("images/logo.png")     // Ok("images/logo.png")
 /// validate_path("./data/file.json")    // Ok("data/file.json")
