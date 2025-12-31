@@ -668,6 +668,7 @@ proptest! {
         suffix in "[a-zA-Z0-9]{0,5}"
     ) {
         // Forward slash variants work on all platforms
+        #[allow(unused_mut)] // mut needed on Windows for cfg-conditional push
         let mut test_cases = vec![
             format!("{}/../{}", prefix, suffix),
             format!("../{}", suffix),
