@@ -6,7 +6,7 @@ Thank you for your interest in contributing to mik! This document provides guide
 
 ### Prerequisites
 
-- Rust 1.85 or later (see MSRV policy below)
+- Rust 1.89 or later (see MSRV policy below)
 - `cargo-component` for building WASM components
 - `wasm-tools` for inspecting WASM modules
 - `wac` for WASM component composition
@@ -38,11 +38,35 @@ cargo test --all -- --nocapture
 
 ```bash
 # Run clippy
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-features -- -D warnings
 
 # Format code
 cargo fmt --all
+
+# Check dependencies for security vulnerabilities
+cargo deny check
 ```
+
+### Git Hooks Setup
+
+We provide pre-commit hooks that run the same checks as CI. To enable them:
+
+```bash
+# Configure git to use the project's hooks
+git config core.hooksPath .githooks
+
+# Alternatively, you can symlink individual hooks
+# Linux/macOS:
+ln -sf ../../.githooks/pre-commit .git/hooks/pre-commit
+
+# Windows (PowerShell as admin):
+New-Item -ItemType SymbolicLink -Path .git\hooks\pre-commit -Target ..\..\`.githooks\pre-commit
+```
+
+The pre-commit hook runs:
+- `cargo fmt --all -- --check` (formatting)
+- `cargo clippy --all-features -- -D warnings` (linting)
+- `cargo check --all-features` (compilation)
 
 ## Pull Request Process
 
@@ -131,7 +155,7 @@ pub fn execute_handler(module: &str, request: Request) -> Result<Response, Error
 
 ## MSRV Policy
 
-The Minimum Supported Rust Version (MSRV) is **1.85**.
+The Minimum Supported Rust Version (MSRV) is **1.89**.
 
 - MSRV bumps require a minor version bump of mik
 - MSRV is tested in CI
