@@ -134,16 +134,16 @@ fn test_ttl_expiration() {
     let db_path = tmp.path().join("test.redb");
     let store = KvStore::open(&db_path).unwrap();
 
-    // Set with 1 second TTL
-    store.set_with_ttl("temp", b"expires soon", 1).unwrap();
+    // Set with 2 second TTL (enough time to verify it exists on slow CI)
+    store.set_with_ttl("temp", b"expires soon", 2).unwrap();
 
     // Should exist immediately
     assert!(store.exists("temp").unwrap());
     let value = store.get("temp").unwrap().unwrap();
     assert_eq!(value, b"expires soon");
 
-    // Wait for expiration
-    thread::sleep(Duration::from_secs(2));
+    // Wait for expiration (3 seconds to ensure TTL has passed)
+    thread::sleep(Duration::from_secs(3));
 
     // Should be expired and automatically removed
     assert!(!store.exists("temp").unwrap());
