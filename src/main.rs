@@ -10,6 +10,8 @@
 //!
 //! See `mik --help` for full usage information.
 
+#![allow(clippy::redundant_pub_crate)] // Explicit pub(crate) documents intent, aids refactoring
+
 // Use mimalloc for better multi-core performance (especially important for musl builds)
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

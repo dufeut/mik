@@ -23,6 +23,7 @@
 #![allow(clippy::cast_sign_loss)] // Intentional in size calculations
 #![allow(clippy::trivially_copy_pass_by_ref)] // Consistency in API signatures
 #![allow(clippy::too_many_lines)] // Complex HTTP handlers require more lines
+#![allow(clippy::redundant_pub_crate)] // Explicit pub(crate) documents intent, aids refactoring
 
 //! Library crate for mik - exposes modules for testing and integration.
 //!
