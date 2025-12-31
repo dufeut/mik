@@ -1,0 +1,40 @@
+# Pre-commit hooks for mik
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Format Rust code with cargo fmt
+        entry: cargo fmt --all --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Lint Rust code with clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        description: Run library tests
+        entry: cargo test --lib
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-doc
+        name: cargo doc
+        description: Validate documentation builds without warnings
+        entry: bash -c 'RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]

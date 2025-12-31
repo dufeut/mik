@@ -1,8 +1,8 @@
 # Rust formatting configuration for mik
 # Only using stable rustfmt features
 
-# Edition
-edition = "2021"
+# Edition (Rust 2024)
+edition = "2024"
 
 # Maximum line width
 max_width = 100

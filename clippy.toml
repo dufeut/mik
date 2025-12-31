@@ -1,0 +1,67 @@
+# Clippy configuration for the mik project
+# https://doc.rust-lang.org/clippy/configuration.html
+
+# API stability - warn when changes might break downstream users
+avoid-breaking-exported-api = true
+
+# Cognitive complexity threshold (default is 25)
+cognitive-complexity-threshold = 25
+
+# Type complexity threshold
+type-complexity-threshold = 250
+
+# Allow common wildcard imports in test modules
+allowed-wildcard-imports = ["tests", "proptest::prelude", "super"]
+
+# MSRV for compatibility checks
+msrv = "1.89"
+
+# Maximum number of lines a function body can have (default: 100)
+# Set slightly higher for complex async handlers
+too-many-lines-threshold = 120
+
+# Maximum number of arguments a function can have (default: 7)
+too-many-arguments-threshold = 8
+
+# Accept more public items in doc-hidden modules for internal APIs
+missing-docs-in-crate-items = false
+
+# Allow larger types to be passed by value in tests (proptest generators)
+pass-by-value-size-limit = 512
+
+# Common technical acronyms that should not trigger doc_markdown lint
+doc-valid-idents = [
+    "WASI",
+    "HTTP",
+    "HTTPS",
+    "JSON",
+    "UUID",
+    "RFC",
+    "UTF",
+    "API",
+    "SDK",
+    "URL",
+    "URI",
+    "HTML",
+    "CSS",
+    "SQL",
+    "CRUD",
+    "REST",
+    "OAuth",
+    "JWT",
+    "SSRF",
+    "XSS",
+    "CORS",
+    "TLS",
+    "SSL",
+    "WASM",
+    "AOT",
+    "LRU",
+    "OTLP",
+    "OCI",
+    "PID",
+    "CLI",
+    "TOML",
+    "YAML",
+    "KV",
+]
