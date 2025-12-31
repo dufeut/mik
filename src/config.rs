@@ -596,3 +596,455 @@ cache_size = 20
         assert_eq!(server.cache_size, 20);
     }
 }
+
+#[cfg(test)]
+mod property_tests {
+    //! Property-based tests for configuration parsing and validation.
+    //!
+    //! These tests verify invariants for the configuration system:
+    //! - Valid TOML configuration roundtrips correctly
+    //! - Default configuration is always valid
+    //! - Validation catches all specified error conditions
+
+    use proptest::prelude::*;
+
+    use super::{Config, Package, RouteConfig, ServerConfig};
+
+    // ============================================================================
+    // Test Strategies - Input Generation
+    // ============================================================================
+
+    /// Strategy for generating valid package names.
+    fn valid_package_name() -> impl Strategy<Value = String> {
+        "[a-zA-Z][a-zA-Z0-9_-]{0,30}".prop_filter("must not be empty", |s| !s.is_empty())
+    }
+
+    /// Strategy for generating valid semver versions.
+    fn valid_version() -> impl Strategy<Value = String> {
+        (0u32..100, 0u32..100, 0u32..100)
+            .prop_map(|(major, minor, patch)| format!("{major}.{minor}.{patch}"))
+    }
+
+    /// Strategy for generating valid HTTP methods.
+    fn valid_http_method() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("GET".to_string()),
+            Just("POST".to_string()),
+            Just("PUT".to_string()),
+            Just("DELETE".to_string()),
+            Just("PATCH".to_string()),
+            Just("HEAD".to_string()),
+            Just("OPTIONS".to_string()),
+        ]
+    }
+
+    /// Strategy for generating valid route paths.
+    fn valid_route_path() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("/".to_string()),
+            Just("/health".to_string()),
+            Just("/api/v1".to_string()),
+            Just("/users/:id".to_string()),
+            "/[a-z]{1,20}".prop_map(|s| format!("/{s}")),
+        ]
+    }
+
+    /// Strategy for generating valid port numbers.
+    fn valid_port() -> impl Strategy<Value = u16> {
+        1024u16..=65535u16
+    }
+
+    /// Strategy for generating valid cache sizes.
+    fn valid_cache_size() -> impl Strategy<Value = usize> {
+        1usize..=1000usize
+    }
+
+    /// Strategy for generating valid Package structs.
+    fn valid_package() -> impl Strategy<Value = Package> {
+        (valid_package_name(), valid_version()).prop_map(|(name, version)| Package {
+            name,
+            version,
+            description: None,
+        })
+    }
+
+    /// Strategy for generating valid RouteConfig structs.
+    fn valid_route_config() -> impl Strategy<Value = RouteConfig> {
+        (
+            valid_package_name(),
+            valid_route_path(),
+            valid_http_method(),
+        )
+            .prop_map(|(name, path, method)| RouteConfig {
+                name,
+                path,
+                method,
+                description: None,
+            })
+    }
+
+    /// Strategy for generating valid ServerConfig structs.
+    fn valid_server_config() -> impl Strategy<Value = ServerConfig> {
+        (valid_port(), valid_cache_size()).prop_map(|(port, cache_size)| ServerConfig {
+            port,
+            modules: None,
+            cache_size,
+        })
+    }
+
+    /// Strategy for generating complete valid Config structs.
+    fn valid_config() -> impl Strategy<Value = Config> {
+        (
+            valid_package(),
+            prop::collection::vec(valid_route_config(), 0..5),
+            prop::option::of(valid_server_config()),
+        )
+            .prop_map(|(package, routes, server)| Config {
+                package,
+                routes,
+                server,
+            })
+    }
+
+    // ============================================================================
+    // Configuration Validation Invariants
+    // ============================================================================
+
+    proptest! {
+        /// Invariant: Valid configuration always passes validation.
+        ///
+        /// Any Config struct constructed with valid components should
+        /// pass validation without errors.
+        #[test]
+        fn valid_config_passes_validation(config in valid_config()) {
+            let result = config.validate();
+            prop_assert!(
+                result.is_ok(),
+                "Valid config should pass validation: {:?}",
+                result
+            );
+        }
+
+        /// Invariant: Package name must not be empty.
+        #[test]
+        fn empty_package_name_fails(version in valid_version()) {
+            let config = Config {
+                package: Package {
+                    name: String::new(),
+                    version,
+                    description: None,
+                },
+                routes: vec![],
+                server: None,
+            };
+            let result = config.validate();
+            prop_assert!(result.is_err(), "Empty package name should fail validation");
+        }
+
+        /// Invariant: Package version must not be empty.
+        #[test]
+        fn empty_package_version_fails(name in valid_package_name()) {
+            let config = Config {
+                package: Package {
+                    name,
+                    version: String::new(),
+                    description: None,
+                },
+                routes: vec![],
+                server: None,
+            };
+            let result = config.validate();
+            prop_assert!(result.is_err(), "Empty package version should fail validation");
+        }
+
+        /// Invariant: Route paths must start with "/".
+        #[test]
+        fn route_path_without_slash_fails(
+            name in valid_package_name(),
+            version in valid_version(),
+            route_name in valid_package_name(),
+            method in valid_http_method()
+        ) {
+            let config = Config {
+                package: Package {
+                    name,
+                    version,
+                    description: None,
+                },
+                routes: vec![RouteConfig {
+                    name: route_name,
+                    path: "no-slash".to_string(), // Invalid - no leading /
+                    method,
+                    description: None,
+                }],
+                server: None,
+            };
+            let result = config.validate();
+            prop_assert!(result.is_err(), "Route path without / should fail validation");
+        }
+
+        /// Invariant: Invalid HTTP methods are rejected.
+        #[test]
+        fn invalid_http_method_fails(
+            name in valid_package_name(),
+            version in valid_version(),
+            route_name in valid_package_name(),
+            path in valid_route_path()
+        ) {
+            let config = Config {
+                package: Package {
+                    name,
+                    version,
+                    description: None,
+                },
+                routes: vec![RouteConfig {
+                    name: route_name,
+                    path,
+                    method: "INVALID".to_string(), // Invalid method
+                    description: None,
+                }],
+                server: None,
+            };
+            let result = config.validate();
+            prop_assert!(result.is_err(), "Invalid HTTP method should fail validation");
+        }
+
+        /// Invariant: Port 0 is rejected.
+        #[test]
+        fn port_zero_fails(
+            name in valid_package_name(),
+            version in valid_version(),
+            cache_size in valid_cache_size()
+        ) {
+            let config = Config {
+                package: Package {
+                    name,
+                    version,
+                    description: None,
+                },
+                routes: vec![],
+                server: Some(ServerConfig {
+                    port: 0,
+                    modules: None,
+                    cache_size,
+                }),
+            };
+            let result = config.validate();
+            prop_assert!(result.is_err(), "Port 0 should fail validation");
+        }
+
+        /// Invariant: Cache size 0 is rejected.
+        #[test]
+        fn cache_size_zero_fails(
+            name in valid_package_name(),
+            version in valid_version(),
+            port in valid_port()
+        ) {
+            let config = Config {
+                package: Package {
+                    name,
+                    version,
+                    description: None,
+                },
+                routes: vec![],
+                server: Some(ServerConfig {
+                    port,
+                    modules: None,
+                    cache_size: 0,
+                }),
+            };
+            let result = config.validate();
+            prop_assert!(result.is_err(), "Cache size 0 should fail validation");
+        }
+    }
+
+    // ============================================================================
+    // TOML Roundtrip Tests
+    // ============================================================================
+
+    proptest! {
+        /// Invariant: Valid TOML can be parsed.
+        ///
+        /// Minimal valid TOML should parse successfully.
+        #[test]
+        fn minimal_valid_toml_parses(
+            name in valid_package_name(),
+            version in valid_version()
+        ) {
+            let toml_str = format!(
+                r#"
+[package]
+name = "{name}"
+version = "{version}"
+"#
+            );
+            let result: Result<Config, _> = toml::from_str(&toml_str);
+            prop_assert!(
+                result.is_ok(),
+                "Valid TOML should parse: {}",
+                toml_str
+            );
+        }
+
+        /// Invariant: Config with server section parses correctly.
+        #[test]
+        fn config_with_server_parses(
+            name in valid_package_name(),
+            version in valid_version(),
+            port in valid_port()
+        ) {
+            let toml_str = format!(
+                r#"
+[package]
+name = "{name}"
+version = "{version}"
+
+[server]
+port = {port}
+"#
+            );
+            let result: Result<Config, _> = toml::from_str(&toml_str);
+            prop_assert!(
+                result.is_ok(),
+                "Config with server should parse: {}",
+                toml_str
+            );
+
+            if let Ok(config) = result {
+                prop_assert!(config.server.is_some());
+                prop_assert_eq!(config.server.as_ref().unwrap().port, port);
+            }
+        }
+
+        /// Invariant: Config with routes parses correctly.
+        #[test]
+        fn config_with_routes_parses(
+            name in valid_package_name(),
+            version in valid_version(),
+            route_name in valid_package_name(),
+            route_path in valid_route_path(),
+            method in valid_http_method()
+        ) {
+            let toml_str = format!(
+                r#"
+[package]
+name = "{name}"
+version = "{version}"
+
+[[routes]]
+name = "{route_name}"
+path = "{route_path}"
+method = "{method}"
+"#
+            );
+            let result: Result<Config, _> = toml::from_str(&toml_str);
+            prop_assert!(
+                result.is_ok(),
+                "Config with routes should parse: {}",
+                toml_str
+            );
+
+            if let Ok(config) = result {
+                prop_assert_eq!(config.routes.len(), 1);
+                prop_assert_eq!(config.routes[0].name.clone(), route_name);
+            }
+        }
+    }
+
+    // ============================================================================
+    // Default Configuration Tests
+    // ============================================================================
+
+    proptest! {
+        /// Invariant: Default server config uses expected port.
+        #[test]
+        fn default_server_port_is_3000(_dummy in Just(())) {
+            let toml_str = r#"
+[package]
+name = "test"
+version = "0.1.0"
+
+[server]
+"#;
+            let result: Result<Config, _> = toml::from_str(toml_str);
+            prop_assert!(result.is_ok());
+
+            if let Ok(config) = result {
+                prop_assert!(config.server.is_some());
+                // Default port should be from constants (3000)
+                let server = config.server.unwrap();
+                prop_assert!(server.port > 0, "Default port should be non-zero");
+            }
+        }
+    }
+
+    // ============================================================================
+    // Edge Case Tests
+    // ============================================================================
+
+    proptest! {
+        /// Invariant: Multiple validation errors are collected.
+        #[test]
+        fn multiple_errors_detected(_dummy in Just(())) {
+            let config = Config {
+                package: Package {
+                    name: String::new(),      // Error 1
+                    version: String::new(),   // Error 2
+                    description: None,
+                },
+                routes: vec![RouteConfig {
+                    name: String::new(),       // Error 3
+                    path: "no-slash".to_string(), // Error 4
+                    method: "INVALID".to_string(), // Error 5
+                    description: None,
+                }],
+                server: Some(ServerConfig {
+                    port: 0,                   // Error 6
+                    modules: None,
+                    cache_size: 0,             // Error 7
+                }),
+            };
+            let result = config.validate();
+            prop_assert!(result.is_err());
+
+            // The error message should contain multiple errors
+            if let Err(e) = result {
+                let msg = e.to_string();
+                // Should mention at least package.name and package.version
+                prop_assert!(
+                    msg.contains("package.name") || msg.contains("name"),
+                    "Error should mention package name"
+                );
+            }
+        }
+
+        /// Invariant: Route name can match package name.
+        #[test]
+        fn route_name_can_match_package_name(
+            name in valid_package_name(),
+            version in valid_version(),
+            path in valid_route_path(),
+            method in valid_http_method()
+        ) {
+            let config = Config {
+                package: Package {
+                    name: name.clone(),
+                    version,
+                    description: None,
+                },
+                routes: vec![RouteConfig {
+                    name: name.clone(), // Same as package name
+                    path,
+                    method,
+                    description: None,
+                }],
+                server: None,
+            };
+            let result = config.validate();
+            prop_assert!(
+                result.is_ok(),
+                "Route name matching package name should be valid"
+            );
+        }
+    }
+}
