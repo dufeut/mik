@@ -6,10 +6,8 @@
 //! - **KV**: Key-value store backed by redb
 //! - **SQL**: `SQLite` database for relational data
 //! - **Storage**: Filesystem-based object storage
-//! - **Queue**: In-memory message queues with pub/sub
 
 pub mod kv;
-pub mod queue;
 pub mod sql;
 pub mod storage;
 
@@ -26,7 +24,6 @@ pub fn get_data_dir() -> anyhow::Result<PathBuf> {
 /// Service configuration for embedded services.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct ServiceConfig {
     /// Enable KV service
     pub kv_enabled: bool,
@@ -34,8 +31,6 @@ pub struct ServiceConfig {
     pub sql_enabled: bool,
     /// Enable Storage service
     pub storage_enabled: bool,
-    /// Enable Queue service
-    pub queue_enabled: bool,
 }
 
 impl Default for ServiceConfig {
@@ -44,7 +39,6 @@ impl Default for ServiceConfig {
             kv_enabled: true,
             sql_enabled: true,
             storage_enabled: true,
-            queue_enabled: true,
         }
     }
 }

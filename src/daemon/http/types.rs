@@ -253,56 +253,6 @@ impl From<ObjectMeta> for StorageObjectInfo {
 }
 
 // =============================================================================
-// Queue Service Types
-// =============================================================================
-
-/// Request to push a message.
-#[derive(Debug, Deserialize)]
-pub struct QueuePushRequest {
-    pub payload: serde_json::Value,
-}
-
-/// Response for queue pop operation.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct QueuePopResponse {
-    pub message: Option<QueueMessageInfo>,
-}
-
-/// Response for queue peek operation.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct QueuePeekResponse {
-    pub message: Option<QueueMessageInfo>,
-}
-
-/// Queue message info.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct QueueMessageInfo {
-    pub id: String,
-    pub payload: serde_json::Value,
-    pub created_at: String,
-}
-
-/// Response for queue info.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct QueueInfoResponse {
-    pub name: String,
-    pub length: usize,
-    pub persistent: bool,
-}
-
-/// Response for list queues.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ListQueuesResponse {
-    pub queues: Vec<QueueInfoResponse>,
-}
-
-/// Request to publish to a topic.
-#[derive(Debug, Deserialize)]
-pub struct TopicPublishRequest {
-    pub payload: serde_json::Value,
-}
-
-// =============================================================================
 // Cron Service Types
 // =============================================================================
 

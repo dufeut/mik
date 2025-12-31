@@ -21,8 +21,6 @@ serde_json = "1.0"
 
 # For testing path operations
 tempfile = "3.24"
-
-# For UUID validation in queue fuzzer
 uuid = "1.0"
 
 [[bin]]
@@ -88,9 +86,3 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "fuzz_queue_messages"
-path = "fuzz_targets/fuzz_queue_messages.rs"
-test = false
-doc = false
-bench = false

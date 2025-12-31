@@ -31,15 +31,6 @@
 //! - `HEAD /storage/*path` - Get object metadata
 //! - `GET /storage` - List objects (with optional prefix)
 //!
-//! ### Queue Service (`/queues`)
-//! - `POST /queues/:name/push` - Push message
-//! - `POST /queues/:name/pop` - Pop message
-//! - `GET /queues/:name/peek` - Peek at next message
-//! - `GET /queues/:name` - Get queue info
-//! - `DELETE /queues/:name` - Delete queue
-//! - `GET /queues` - List all queues
-//! - `POST /topics/:name/publish` - Publish to topic
-//!
 //! ### Cron Scheduler (`/cron`)
 //! - `GET /cron` - List all scheduled jobs
 //! - `POST /cron` - Create a new scheduled job
@@ -101,12 +92,7 @@ use tokio::sync::RwLock;
 use crate::daemon::cron::CronScheduler;
 use crate::daemon::metrics;
 use crate::daemon::process::{self, SpawnConfig};
-use crate::daemon::services::{
-    kv::KvStore,
-    queue::{QueueConfig, QueueService},
-    sql::SqlService,
-    storage::StorageService,
-};
+use crate::daemon::services::{kv::KvStore, sql::SqlService, storage::StorageService};
 use crate::daemon::state::{Instance, StateStore, Status};
 
 pub mod handlers;
@@ -135,13 +121,6 @@ use handlers::{
     kv_list,
     kv_set,
     list_instances,
-    // Queue
-    queue_delete,
-    queue_info,
-    queue_list,
-    queue_peek,
-    queue_pop,
-    queue_push,
     restart_instance,
     // Services
     services_delete,
@@ -161,7 +140,6 @@ use handlers::{
     storage_head,
     storage_list,
     storage_put,
-    topic_publish,
     version,
 };
 
@@ -175,7 +153,6 @@ pub(crate) struct AppState {
     kv: KvStore,
     sql: SqlService,
     storage: StorageService,
-    queue: QueueService,
     cron: CronScheduler,
 }
 
@@ -214,8 +191,6 @@ pub async fn serve(port: u16, state_path: PathBuf) -> Result<()> {
     let sql = SqlService::open(data_dir.join("sql.db")).context("Failed to open SQL database")?;
     let storage =
         StorageService::open(data_dir.join("storage")).context("Failed to open storage service")?;
-    let queue =
-        QueueService::new(QueueConfig::default()).context("Failed to create queue service")?;
 
     // Initialize cron scheduler
     let cron = CronScheduler::new()
@@ -245,7 +220,6 @@ pub async fn serve(port: u16, state_path: PathBuf) -> Result<()> {
         kv,
         sql,
         storage,
-        queue,
         cron,
     }));
 
@@ -275,14 +249,6 @@ pub async fn serve(port: u16, state_path: PathBuf) -> Result<()> {
         .route("/storage/{*path}", put(storage_put))
         .route("/storage/{*path}", delete(storage_delete))
         .route("/storage/{*path}", head(storage_head))
-        // Queue service
-        .route("/queues", get(queue_list))
-        .route("/queues/{name}", get(queue_info))
-        .route("/queues/{name}", delete(queue_delete))
-        .route("/queues/{name}/push", post(queue_push))
-        .route("/queues/{name}/pop", post(queue_pop))
-        .route("/queues/{name}/peek", get(queue_peek))
-        .route("/topics/{name}/publish", post(topic_publish))
         // Cron scheduler
         .route("/cron", get(cron_list).post(cron_create))
         .route(
@@ -837,7 +803,6 @@ mod tests {
         let kv = KvStore::open(data_dir.join("kv.redb")).unwrap();
         let sql = SqlService::open(data_dir.join("sql.db")).unwrap();
         let storage = StorageService::open(data_dir.join("storage")).unwrap();
-        let queue = QueueService::new(QueueConfig::default()).unwrap();
         let cron = CronScheduler::new().await.unwrap();
 
         let app_state = Arc::new(RwLock::new(AppState {
@@ -845,7 +810,6 @@ mod tests {
             kv,
             sql,
             storage,
-            queue,
             cron,
         }));
 
@@ -865,14 +829,6 @@ mod tests {
             .route("/storage/{*path}", put(storage_put))
             .route("/storage/{*path}", delete(storage_delete))
             .route("/storage/{*path}", head(storage_head))
-            // Queue service
-            .route("/queues", get(queue_list))
-            .route("/queues/{name}", get(queue_info))
-            .route("/queues/{name}", delete(queue_delete))
-            .route("/queues/{name}/push", post(queue_push))
-            .route("/queues/{name}/pop", post(queue_pop))
-            .route("/queues/{name}/peek", get(queue_peek))
-            .route("/topics/{name}/publish", post(topic_publish))
             // Service discovery
             .route("/services", get(services_list).post(services_register))
             .route(
@@ -1392,231 +1348,6 @@ mod tests {
     }
 
     // =========================================================================
-    // Queue Service Tests
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_queue_push_and_pop() {
-        let app = create_test_app().await;
-
-        // Push a message
-        let push_request = Request::builder()
-            .method(Method::POST)
-            .uri("/queues/test-queue/push")
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"payload": {"message": "hello"}}"#))
-            .unwrap();
-
-        let response = app.clone().oneshot(push_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        // Pop the message
-        let pop_request = Request::builder()
-            .method(Method::POST)
-            .uri("/queues/test-queue/pop")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(pop_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let pop_response: QueuePopResponse = serde_json::from_slice(&body).unwrap();
-        assert!(pop_response.message.is_some());
-        let msg = pop_response.message.unwrap();
-        assert!(!msg.id.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_queue_peek() {
-        let app = create_test_app().await;
-
-        // Push a message
-        let push_request = Request::builder()
-            .method(Method::POST)
-            .uri("/queues/peek-queue/push")
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"payload": "test message"}"#))
-            .unwrap();
-
-        app.clone().oneshot(push_request).await.unwrap();
-
-        // Peek (should not remove)
-        let peek_request = Request::builder()
-            .uri("/queues/peek-queue/peek")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.clone().oneshot(peek_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let peek_response: QueuePeekResponse = serde_json::from_slice(&body).unwrap();
-        assert!(peek_response.message.is_some());
-
-        // Peek again (message should still be there)
-        let peek_request = Request::builder()
-            .uri("/queues/peek-queue/peek")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(peek_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let peek_response: QueuePeekResponse = serde_json::from_slice(&body).unwrap();
-        assert!(peek_response.message.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_queue_pop_empty() {
-        let app = create_test_app().await;
-
-        // Pop from non-existent queue
-        let pop_request = Request::builder()
-            .method(Method::POST)
-            .uri("/queues/empty-queue/pop")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(pop_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let pop_response: QueuePopResponse = serde_json::from_slice(&body).unwrap();
-        assert!(pop_response.message.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_queue_info() {
-        let app = create_test_app().await;
-
-        // Push some messages
-        for i in 0..3 {
-            let push_request = Request::builder()
-                .method(Method::POST)
-                .uri("/queues/info-queue/push")
-                .header("content-type", "application/json")
-                .body(Body::from(format!(r#"{{"payload": {i}}}"#)))
-                .unwrap();
-
-            app.clone().oneshot(push_request).await.unwrap();
-        }
-
-        // Get queue info
-        let info_request = Request::builder()
-            .uri("/queues/info-queue")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(info_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let info_response: QueueInfoResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(info_response.name, "info-queue");
-        assert_eq!(info_response.length, 3);
-    }
-
-    #[tokio::test]
-    async fn test_queue_list() {
-        let app = create_test_app().await;
-
-        // Create multiple queues
-        for name in ["queue-a", "queue-b", "queue-c"] {
-            let push_request = Request::builder()
-                .method(Method::POST)
-                .uri(format!("/queues/{name}/push"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"payload": "msg"}"#))
-                .unwrap();
-
-            app.clone().oneshot(push_request).await.unwrap();
-        }
-
-        // List queues
-        let list_request = Request::builder()
-            .uri("/queues")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(list_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let list_response: ListQueuesResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(list_response.queues.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_queue_delete() {
-        let app = create_test_app().await;
-
-        // Create a queue
-        let push_request = Request::builder()
-            .method(Method::POST)
-            .uri("/queues/delete-queue/push")
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"payload": "to delete"}"#))
-            .unwrap();
-
-        app.clone().oneshot(push_request).await.unwrap();
-
-        // Delete the queue
-        let delete_request = Request::builder()
-            .method(Method::DELETE)
-            .uri("/queues/delete-queue")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.clone().oneshot(delete_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        // Verify queue is empty (info should return 0 length)
-        let info_request = Request::builder()
-            .uri("/queues/delete-queue")
-            .body(Body::empty())
-            .unwrap();
-
-        let response = app.oneshot(info_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let info_response: QueueInfoResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(info_response.length, 0);
-    }
-
-    #[tokio::test]
-    async fn test_topic_publish() {
-        let app = create_test_app().await;
-
-        // Publish to a topic (no subscribers, should still succeed)
-        let publish_request = Request::builder()
-            .method(Method::POST)
-            .uri("/topics/test-topic/publish")
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"payload": {"event": "test"}}"#))
-            .unwrap();
-
-        let response = app.oneshot(publish_request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    // =========================================================================
     // Error Handling Tests
     // =========================================================================
 
@@ -1893,7 +1624,7 @@ mod tests {
             .body(Body::from(
                 r#"{
                 "name": "heartbeat-test",
-                "service_type": "queue",
+                "service_type": "storage",
                 "url": "http://localhost:9004"
             }"#,
             ))
@@ -1999,7 +1730,6 @@ mod tests {
         let kv = KvStore::open(data_dir.join("kv.redb")).unwrap();
         let sql = SqlService::open(data_dir.join("sql.db")).unwrap();
         let storage = StorageService::open(data_dir.join("storage")).unwrap();
-        let queue = QueueService::new(QueueConfig::default()).unwrap();
         let cron = CronScheduler::new().await.unwrap();
 
         let app_state = Arc::new(RwLock::new(AppState {
@@ -2007,7 +1737,6 @@ mod tests {
             kv,
             sql,
             storage,
-            queue,
             cron,
         }));
 
@@ -2057,9 +1786,9 @@ mod tests {
 
         // In test environment, MIK_API_KEY is typically not set
         // This validates the LazyLock initializes without panic
-        if key.is_some() {
+        if let Some(k) = key {
             // If set, ensure it's not empty (our filter)
-            assert!(!key.unwrap().is_empty());
+            assert!(!k.is_empty());
         }
     }
 }

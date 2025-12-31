@@ -3,7 +3,6 @@
 pub mod cron;
 pub mod instances;
 pub mod kv;
-pub mod queue;
 pub mod services;
 pub mod sql;
 pub mod storage;
@@ -17,9 +16,6 @@ pub(crate) use instances::{
     stop_instance, version,
 };
 pub(crate) use kv::{kv_delete, kv_get, kv_list, kv_set};
-pub(crate) use queue::{
-    queue_delete, queue_info, queue_list, queue_peek, queue_pop, queue_push, topic_publish,
-};
 pub(crate) use services::{
     services_delete, services_get, services_heartbeat, services_list, services_register,
 };
