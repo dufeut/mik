@@ -52,21 +52,13 @@ cargo deny check
 We provide pre-commit hooks that run the same checks as CI. To enable them:
 
 ```bash
-# Configure git to use the project's hooks
 git config core.hooksPath .githooks
-
-# Alternatively, you can symlink individual hooks
-# Linux/macOS:
-ln -sf ../../.githooks/pre-commit .git/hooks/pre-commit
-
-# Windows (PowerShell as admin):
-New-Item -ItemType SymbolicLink -Path .git\hooks\pre-commit -Target ..\..\`.githooks\pre-commit
 ```
 
-The pre-commit hook runs:
+The pre-commit hook runs on Rust files only (skips docs, markdown, etc.):
 - `cargo fmt --all -- --check` (formatting)
-- `cargo clippy --all-features -- -D warnings` (linting)
-- `cargo check --all-features` (compilation)
+- `cargo clippy --all-features --all-targets -- -D warnings` (linting)
+- `cargo check --all-features --all-targets` (compilation)
 
 ## Pull Request Process
 
