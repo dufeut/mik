@@ -54,7 +54,14 @@ pub(crate) fn preprocess_script(script: &str) -> String {
 }
 
 /// Convert a JavaScript value to a JSON value.
-#[allow(clippy::needless_pass_by_value)] // JsValue ownership needed for rquickjs
+///
+/// # Note on `needless_pass_by_value`
+/// rquickjs `JsValue` must be passed by value because the conversion process may
+/// consume the value (e.g., when extracting strings or iterating arrays). The JS
+/// runtime's GC expects clear ownership semantics at the FFI boundary. Additionally,
+/// `JsValue::clone()` is cheap (reference-counted internally), so callers can clone
+/// if they need to retain the value.
+#[allow(clippy::needless_pass_by_value)] // rquickjs JsValue ownership required for safe FFI conversion
 pub(crate) fn js_to_json<'js>(
     ctx: &rquickjs::Ctx<'js>,
     value: JsValue<'js>,

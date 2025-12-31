@@ -3,8 +3,8 @@
 //! Creates tar.gz archives containing the component and assets.
 
 use anyhow::{Context, Result};
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use std::fs::File;
 use std::path::Path;
 

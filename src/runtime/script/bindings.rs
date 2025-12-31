@@ -40,7 +40,13 @@ impl Drop for HostBridgeGuard {
 }
 
 /// Native `host_call` function - takes module and options JSON, returns response JSON.
-#[allow(clippy::needless_pass_by_value)] // Required for rquickjs FFI
+///
+/// # Note on `needless_pass_by_value`
+/// rquickjs requires owned `String` values for JS function bindings because the FFI
+/// boundary transfers ownership from the JS runtime to Rust. References would require
+/// the JS runtime to maintain the strings alive across the FFI call, which is not
+/// guaranteed by the rquickjs binding model.
+#[allow(clippy::needless_pass_by_value)] // rquickjs FFI requires owned values for JS function bindings
 pub(crate) fn native_host_call(module: String, options_json: String) -> rquickjs::Result<String> {
     HOST_BRIDGE.with(|cell| {
         let bridge = cell.borrow();

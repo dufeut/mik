@@ -69,15 +69,6 @@ pub struct SpawnConfig {
     pub hot_reload: bool,
 }
 
-impl SpawnConfig {
-    /// Set hot-reload mode (bypasses AOT cache for faster restarts during development).
-    #[must_use]
-    pub fn with_hot_reload(mut self, enabled: bool) -> Self {
-        self.hot_reload = enabled;
-        self
-    }
-}
-
 /// Information about a running instance.
 #[derive(Debug, Clone)]
 pub struct InstanceInfo {

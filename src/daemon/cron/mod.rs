@@ -46,7 +46,7 @@ mod types;
 // Re-export public API for backward compatibility
 pub use manifest::parse_schedules_from_manifest;
 pub use scheduler::CronScheduler;
-pub use types::{JobExecution, JobInfo, ScheduleConfig};
+pub use types::{JobExecution, ScheduleConfig};
 
 #[cfg(test)]
 mod tests {

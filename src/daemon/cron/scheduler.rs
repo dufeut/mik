@@ -124,13 +124,13 @@ impl CronScheduler {
     /// Lists all scheduled jobs.
     pub async fn list_jobs(&self) -> Vec<JobInfo> {
         let jobs = self.jobs.read().await;
-        jobs.values().map(|state| state.to_job_info()).collect()
+        jobs.values().map(JobState::to_job_info).collect()
     }
 
     /// Gets information about a specific job.
     pub async fn get_job(&self, name: &str) -> Option<JobInfo> {
         let jobs = self.jobs.read().await;
-        jobs.get(name).map(|state| state.to_job_info())
+        jobs.get(name).map(JobState::to_job_info)
     }
 
     /// Gets execution history for a job.

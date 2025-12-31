@@ -17,9 +17,6 @@
 //! - [`log_rotation`]: Log file rotation
 //! - [`utils`]: Shared utility functions
 
-#![allow(dead_code)] // Daemon infrastructure for future background mode
-#![allow(clippy::unnecessary_wraps)]
-
 mod health;
 mod lifecycle;
 mod log_rotation;
@@ -27,7 +24,12 @@ mod types;
 mod utils;
 
 // Re-export public API for backward compatibility
+// Process management functions are used by `mik daemon` commands (up/down/ps/logs).
+// These will be actively used once background daemon mode is fully implemented.
+#[allow(dead_code)] // Used by `mik daemon` commands - pending full daemon mode implementation
 pub use health::{is_running, tail_log};
-pub use lifecycle::{kill_instance, spawn_instance, spawn_instance_with_rotation};
-pub use log_rotation::{rotate_all_logs, rotate_log_if_needed};
-pub use types::{InstanceInfo, LogRotationConfig, SpawnConfig};
+#[allow(dead_code)]
+// Used by `mik up`/`mik down` commands - pending full daemon mode implementation
+pub use lifecycle::{kill_instance, spawn_instance};
+#[allow(dead_code)] // Used by `mik up` command - pending full daemon mode implementation
+pub use types::SpawnConfig;

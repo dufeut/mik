@@ -79,12 +79,12 @@ pub(crate) fn cleanup_old_logs(log_path: &Path, max_files: usize) -> Result<()> 
             let filename = path.file_name().unwrap_or_default().to_string_lossy();
 
             // Check if this is a rotated version of our log file
-            if filename.starts_with(&format!("{log_name}.")) && path != log_path {
-                if let Ok(metadata) = fs::metadata(&path) {
-                    if let Ok(modified) = metadata.modified() {
-                        rotated_files.push((path, modified));
-                    }
-                }
+            if filename.starts_with(&format!("{log_name}."))
+                && path != log_path
+                && let Ok(metadata) = fs::metadata(&path)
+                && let Ok(modified) = metadata.modified()
+            {
+                rotated_files.push((path, modified));
             }
         }
     }
@@ -129,10 +129,10 @@ pub fn rotate_all_logs(config: &LogRotationConfig) -> Result<usize> {
             let path = entry.path();
 
             // Only rotate .log files (not already rotated ones)
-            if path.extension().is_some_and(|ext| ext == "log") {
-                if rotate_log_if_needed(&path, config)? {
-                    rotated_count += 1;
-                }
+            if path.extension().is_some_and(|ext| ext == "log")
+                && rotate_log_if_needed(&path, config)?
+            {
+                rotated_count += 1;
             }
         }
     }

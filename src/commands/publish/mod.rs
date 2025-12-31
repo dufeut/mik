@@ -88,11 +88,11 @@ pub fn execute(tag: Option<&str>, dry_run: bool) -> Result<()> {
         Ok(url) => {
             spinner.set_message("Release created successfully");
             url
-        }
+        },
         Err(e) => {
             spinner.finish_and_clear();
             return handle_publish_error(e, &repo, version);
-        }
+        },
     };
 
     // Upload raw .wasm for direct download
