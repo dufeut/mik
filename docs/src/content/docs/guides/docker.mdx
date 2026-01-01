@@ -1,0 +1,221 @@
+---
+title: Docker
+description: Running mik in containers with Docker and Docker Compose
+---
+
+mik is available as a minimal Docker image (~49MB) for containerized deployments.
+
+## Quick Start
+
+```bash
+# Pull the image
+docker pull ghcr.io/dufeut/mik
+
+# Run with volume mount
+docker run -v $(pwd):/app -p 3000:3000 ghcr.io/dufeut/mik
+```
+
+## Project Structure
+
+Mount your project directory to `/app`:
+
+```
+my-project/
+├── mik.toml          # Configuration
+├── modules/          # WASM handlers
+│   ├── api.wasm
+│   └── auth.wasm
+└── scripts/          # Optional: JS orchestration
+    └── router.js
+```
+
+## Docker Compose
+
+### Basic Setup
+
+```yaml
+# docker-compose.yml
+services:
+  mik:
+    image: ghcr.io/dufeut/mik:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+    environment:
+      - RUST_LOG=info
+```
+
+### With OpenTelemetry
+
+```yaml
+services:
+  mik:
+    image: ghcr.io/dufeut/mik:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+    environment:
+      - RUST_LOG=info
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317" # OTLP gRPC
+```
+
+With `mik.toml`:
+
+```toml
+[project]
+name = "my-service"
+
+[server]
+port = 3000
+modules = "modules/"
+
+[tracing]
+enabled = true
+otlp_endpoint = "http://jaeger:4317"
+```
+
+### Production Setup
+
+```yaml
+services:
+  mik:
+    image: ghcr.io/dufeut/mik:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./modules:/app/modules:ro
+      - ./mik.toml:/app/mik.toml:ro
+    environment:
+      - RUST_LOG=info
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "/mik", "run", "--help"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+```
+
+### With Reverse Proxy (Caddy)
+
+```yaml
+services:
+  caddy:
+    image: caddy:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      - mik
+
+  mik:
+    image: ghcr.io/dufeut/mik:latest
+    volumes:
+      - ./:/app
+    expose:
+      - "3000"
+
+volumes:
+  caddy_data:
+```
+
+With `Caddyfile`:
+
+```
+example.com {
+    reverse_proxy mik:3000
+}
+```
+
+## Environment Variables
+
+| Variable   | Default   | Description                                  |
+| ---------- | --------- | -------------------------------------------- |
+| `PORT`     | `3000`    | Server port                                  |
+| `RUST_LOG` | `info`    | Log level (`debug`, `info`, `warn`, `error`) |
+| `HOST`     | `0.0.0.0` | Bind address                                 |
+
+## Image Details
+
+The Docker image:
+
+- **Base**: `scratch` (minimal, no shell)
+- **Size**: ~49MB
+- **TLS**: rustls (pure Rust, no OpenSSL)
+- **Features**: Full runtime + OTLP tracing
+- **Disabled**: Registry features (use volume mounts instead)
+
+## Building Custom Image
+
+To include your modules in the image:
+
+```dockerfile
+FROM ghcr.io/dufeut/mik:latest
+
+COPY mik.toml /app/mik.toml
+COPY modules/ /app/modules/
+```
+
+Build and run:
+
+```bash
+docker build -t my-service .
+docker run -p 3000:3000 my-service
+```
+
+## Health Checks
+
+The `/health` endpoint returns service status:
+
+```bash
+curl http://localhost:3000/health
+```
+
+```json
+{
+  "status": "ready",
+  "cache_size": 2,
+  "cache_capacity": 100
+}
+```
+
+## Troubleshooting
+
+### Container exits immediately
+
+Check that `mik.toml` exists and `modules/` contains `.wasm` files:
+
+```bash
+docker run --rm -v $(pwd):/app --entrypoint="" ghcr.io/dufeut/mik:latest /mik run
+```
+
+### Module not found
+
+Ensure the module path in requests matches the filename:
+
+- `modules/api.wasm` → `/run/api/*`
+- `modules/auth.wasm` → `/run/auth/*`
+
+### Permission denied
+
+On Linux, ensure mounted files are readable:
+
+```bash
+chmod -R 644 modules/*.wasm
+chmod 644 mik.toml
+```

@@ -478,15 +478,28 @@ async fn find_bridge(configured_path: Option<&str>) -> Result<PathBuf> {
         }
     }
 
-    // 4. Auto-download from OCI registry
-    println!("  Bridge not found locally, downloading from registry...");
-    let bridge_path = download_bridge().await?;
-    Ok(bridge_path)
+    // 4. Auto-download from OCI registry (only when registry feature is enabled)
+    #[cfg(feature = "registry")]
+    {
+        println!("  Bridge not found locally, downloading from registry...");
+        let bridge_path = download_bridge().await?;
+        Ok(bridge_path)
+    }
+
+    #[cfg(not(feature = "registry"))]
+    anyhow::bail!(
+        "Bridge component not found and registry feature is disabled.\n\n\
+         Options:\n\
+         1. Place bridge.wasm in modules/bridge.wasm\n\
+         2. Add to mik.toml: [composition]\\n   bridge = \"path/to/bridge.wasm\"\n\
+         3. Rebuild mik with registry feature enabled"
+    )
 }
 
 /// Download the bridge component from OCI registry.
 ///
 /// Downloads to `~/.mik/tools/bridge/latest.wasm`.
+#[cfg(feature = "registry")]
 async fn download_bridge() -> Result<PathBuf> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;

@@ -131,23 +131,36 @@ async fn fetch_wit() -> Result<String> {
         }
     }
 
-    // Download from OCI
-    println!("Fetching WIT interface from registry...");
-    let wit_content = download_wit().await?;
+    // Download from OCI (only when registry feature is enabled)
+    #[cfg(feature = "registry")]
+    {
+        println!("Fetching WIT interface from registry...");
+        let wit_content = download_wit().await?;
 
-    // Cache for future use
-    if let Some(home) = dirs::home_dir() {
-        let cache_path = home.join(WIT_CACHE_PATH);
-        if let Some(parent) = cache_path.parent() {
-            let _ = fs::create_dir_all(parent);
+        // Cache for future use
+        if let Some(home) = dirs::home_dir() {
+            let cache_path = home.join(WIT_CACHE_PATH);
+            if let Some(parent) = cache_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(&cache_path, &wit_content);
         }
-        let _ = fs::write(&cache_path, &wit_content);
+
+        Ok(wit_content)
     }
 
-    Ok(wit_content)
+    #[cfg(not(feature = "registry"))]
+    anyhow::bail!(
+        "WIT interface not cached and registry feature is disabled.\n\n\
+         The WIT interface is required for project scaffolding.\n\
+         Options:\n\
+         1. Rebuild mik with registry feature enabled\n\
+         2. Manually place the WIT at ~/.mik/tools/wit/core.wit"
+    )
 }
 
 /// Download WIT from OCI registry.
+#[cfg(feature = "registry")]
 async fn download_wit() -> Result<String> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;

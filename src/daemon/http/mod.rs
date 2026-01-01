@@ -83,6 +83,7 @@ use tokio::sync::RwLock;
 
 use crate::daemon::cron::CronScheduler;
 use crate::daemon::metrics;
+#[cfg(feature = "otlp")]
 use crate::daemon::otlp;
 use crate::daemon::process::{self, SpawnConfig};
 use crate::daemon::services::{kv::KvStore, sql::SqlService, storage::StorageService};
@@ -403,6 +404,7 @@ async fn graceful_shutdown(state: SharedState) {
     }
 
     // Flush OTLP traces before exit
+    #[cfg(feature = "otlp")]
     otlp::shutdown();
 
     tracing::info!("Graceful shutdown complete");

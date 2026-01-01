@@ -19,7 +19,17 @@
 ## Install
 
 ```bash
+# macOS / Linux
+curl -LsSf https://raw.githubusercontent.com/dufeut/mik/main/install.sh | sh
+
+# Windows
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/dufeut/mik/main/install.ps1 | iex"
+
+# With Cargo
 cargo install mik
+
+# Docker
+docker pull ghcr.io/dufeut/mik
 ```
 
 ## Quick Start

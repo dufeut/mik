@@ -22,7 +22,7 @@ name = "mik"
 path = "src/lib.rs"
 
 [features]
-default = ["registry", "otlp"]
+default = ["registry", "otlp", "native-tls"]
 # Registry features (git + OCI) - optional for minimal Docker builds
 registry = ["dep:git2", "dep:oci-client", "dep:ureq"]
 # OpenTelemetry OTLP export for distributed tracing (Jaeger, Tempo, etc.)
@@ -33,6 +33,11 @@ otlp = [
     "dep:opentelemetry-otlp",
     "dep:tracing-opentelemetry",
 ]
+# TLS backends:
+#   - native-tls: Uses system TLS (schannel/security-framework/OpenSSL) - default for native builds
+#   - rustls: Pure Rust TLS with aws-lc-rs - required for Docker/musl (no system TLS)
+native-tls = ["reqwest/native-tls"]
+rustls = ["reqwest/rustls"]
 
 [dependencies]
 # CLI
@@ -157,7 +162,8 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false, feat
 
 # HTTP API (daemon)
 axum = "0.8"
-reqwest = { version = "0.13.1", default-features = false, features = ["native-tls", "json", "http2"] }
+# TLS backend selected via features: native-tls (default) or rustls (Docker/musl)
+reqwest = { version = "0.13.1", default-features = false, features = ["json", "http2"] }
 
 # CPU detection for auto worker count
 num_cpus = "1.16"

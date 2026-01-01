@@ -33,23 +33,23 @@ else
     exit 1
 fi
 
-# 2. Clippy
+# 2. Clippy (use default features - rustls requires cmake on Windows)
 echo "  -> Running clippy..."
-if cargo clippy --all-features --all-targets -- -D warnings > /dev/null 2>&1; then
+if cargo clippy --all-targets -- -D warnings > /dev/null 2>&1; then
     echo "  OK: Clippy"
 else
     echo "  FAIL: Clippy"
-    echo "  Run 'cargo clippy --all-features --all-targets' to see errors"
+    echo "  Run 'cargo clippy --all-targets' to see errors"
     exit 1
 fi
 
 # 3. Compilation check
 echo "  -> Checking compilation..."
-if cargo check --all-features --all-targets > /dev/null 2>&1; then
+if cargo check --all-targets > /dev/null 2>&1; then
     echo "  OK: Compilation"
 else
     echo "  FAIL: Compilation"
-    echo "  Run 'cargo check --all-features --all-targets' to see errors"
+    echo "  Run 'cargo check --all-targets' to see errors"
     exit 1
 fi
 

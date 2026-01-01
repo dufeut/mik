@@ -318,9 +318,7 @@ world = "{{PROJECT_NAME}}"
 "mik:core" = { path = "wit/deps/core" }
 "#;
 
-const RUST_BASIC_LIB_RS: &str = r#"//! {{PROJECT_NAME}} - A mik HTTP handler
-
-routes! {
+const RUST_BASIC_LIB_RS: &str = r#"routes! {
     GET "/" | "" => home,
     GET "/health" => health,
 }

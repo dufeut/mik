@@ -46,6 +46,7 @@ export default defineConfig({
           items: [
             { label: "Configuration", slug: "guides/configuration" },
             { label: "Building Components", slug: "guides/building-components" },
+            { label: "Docker", slug: "guides/docker" },
             { label: "Daemon Services", slug: "guides/daemon" },
             { label: "Scripts & Orchestration", slug: "guides/scripts" },
             { label: "Reliability Features", slug: "guides/reliability" },

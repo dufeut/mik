@@ -1,0 +1,43 @@
+# Build artifacts
+target/
+dist/
+*.wasm
+
+# Git
+.git/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Documentation
+docs/
+
+# Examples
+examples/
+
+# Tests
+tests/
+
+# CI/CD
+.github/
+
+# Config files not needed for build
+*.md
+*.toml.example
+cliff.toml
+rustfmt.toml
+.gitignore
+.editorconfig
+
+# Scripts (installers)
+install.sh
+install.ps1
+
+# Misc
+*.log
+*.tmp
+*.bak
