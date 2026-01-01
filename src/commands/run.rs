@@ -17,8 +17,8 @@ use std::path::Path;
 use std::process::{Child, Command};
 
 use crate::manifest::{Manifest, TracingConfig};
-use crate::runtime::HostBuilder;
-use crate::runtime::lb::{LoadBalancer, LoadBalancerConfig};
+use crate::runtime::lb::LoadBalancerConfig;
+use crate::runtime::{Runtime, Server};
 
 /// Run components with the embedded runtime.
 ///
@@ -284,11 +284,9 @@ async fn run_with_lb(
     // Create load balancer config from mik.toml [lb] section
     let lb_config = LoadBalancerConfig::from_manifest(&lb_manifest_config, lb_addr, backend_addrs);
 
-    let lb = LoadBalancer::new(lb_config)?;
-
     // Run load balancer with Ctrl+C handling
     tokio::select! {
-        result = lb.serve() => {
+        result = lb_config.serve() => {
             if let Err(e) = result {
                 eprintln!("Load balancer error: {e}");
             }
@@ -329,19 +327,21 @@ async fn run_single_instance(
             validate_wasm_file(&component)?;
 
             if Path::new("mik.toml").exists() {
-                HostBuilder::from_manifest("mik.toml")
+                Runtime::builder()
+                    .from_manifest_file("mik.toml")
                     .context("Failed to load mik.toml")?
                     .modules_dir(&component)
             } else {
-                HostBuilder::new().modules_dir(&component)
+                Runtime::builder().modules_dir(&component)
             }
         },
 
         // No path provided -> multi-module mode from mik.toml
         _ => {
             if Path::new("mik.toml").exists() {
-                let builder =
-                    HostBuilder::from_manifest("mik.toml").context("Failed to load mik.toml")?;
+                let builder = Runtime::builder()
+                    .from_manifest_file("mik.toml")
+                    .context("Failed to load mik.toml")?;
 
                 println!("Multi-module mode from mik.toml");
                 builder
@@ -350,7 +350,7 @@ async fn run_single_instance(
                 if let Ok(component) = find_default_component() {
                     println!("Single component mode: {component}");
                     validate_wasm_file(&component)?;
-                    HostBuilder::new().modules_dir(&component)
+                    Runtime::builder().modules_dir(&component)
                 } else {
                     anyhow::bail!(
                         "No mik.toml found and no component specified.\n\n\
@@ -375,7 +375,7 @@ async fn run_single_instance(
     }
 
     let port = builder.get_port();
-    let host = builder.build().context("Failed to build host")?;
+    let runtime = builder.build().context("Failed to build runtime")?;
 
     // Determine bind address: --local flag or HOST env var or default 0.0.0.0
     let bind_host = if std::env::var("MIK_LOCAL").is_ok() {
@@ -389,13 +389,13 @@ async fn run_single_instance(
 
     println!("Starting server on http://{addr}");
 
-    if let Some(name) = host.single_component_name() {
+    if let Some(name) = runtime.single_component_name() {
         println!("Routes: /run/{name}/* -> component");
     } else {
         println!("Routes: /run/<module>/* -> <module>.wasm");
     }
 
-    if host.has_static_files() {
+    if runtime.has_static_files() {
         println!("Routes: /static/* -> static files");
     }
 
@@ -403,8 +403,9 @@ async fn run_single_instance(
     println!("Metrics: /metrics");
     println!();
 
-    // Run the server
-    host.serve(addr).await.context("Server error")?;
+    // Run the server with the new library-first API
+    let server = Server::new(runtime, addr);
+    server.serve().await.context("Server error")?;
 
     Ok(())
 }

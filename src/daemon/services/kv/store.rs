@@ -1,315 +1,208 @@
-//! Core `KvStore` implementation with synchronous operations.
+//! High-level `KvStore` wrapper over backend implementations.
 //!
-//! Provides the main key-value store interface backed by redb.
+//! Provides a convenient API that wraps any `KvBackend` implementation.
 
-use super::types::KvEntry;
-use anyhow::{Context, Result};
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use super::backend::KvBackend;
+use super::memory::MemoryBackend;
+use super::redb::RedbBackend;
+use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
-/// Table name for key-value pairs with expiration metadata
-pub(super) const KV_TABLE: TableDefinition<'static, &'static str, &'static [u8]> =
-    TableDefinition::new("kv");
-
-/// Key-value store interface wrapping redb database.
+/// High-level key-value store interface.
 ///
-/// Provides simple KV operations with optional TTL support and automatic
-/// expiration cleanup. All operations serialize to JSON for human-readable
-/// debugging in redb.
+/// Wraps a `KvBackend` implementation and provides a consistent API
+/// regardless of the underlying storage mechanism.
 ///
 /// # Thread Safety
 ///
 /// `KvStore` is `Clone` and can be shared across threads. The underlying
-/// database handles concurrent access safely.
+/// backend handles concurrent access safely.
+///
+/// # Example
+///
+/// ```ignore
+/// use mik::daemon::services::kv::KvStore;
+/// use std::time::Duration;
+///
+/// // Create an in-memory store
+/// let store = KvStore::memory();
+///
+/// // Set a value with TTL
+/// store.set("session:123", b"user_data", Some(Duration::from_secs(3600))).await?;
+///
+/// // Get the value
+/// if let Some(data) = store.get("session:123").await? {
+///     println!("Found: {} bytes", data.len());
+/// }
+/// ```
 #[derive(Clone)]
 pub struct KvStore {
-    pub(super) db: Arc<Database>,
+    backend: Arc<dyn KvBackend>,
 }
 
 impl KvStore {
-    /// Opens or creates the KV database at the given path.
+    /// Creates a new `KvStore` backed by a file-based redb database.
     ///
-    /// Creates parent directories if needed. Uses redb's ACID guarantees
-    /// to prevent corruption on crashes or unclean shutdowns.
-    /// Initializes the KV table on first open.
+    /// This is the default for CLI usage where persistence is required.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Parent directory cannot be created
-    /// - Database file cannot be opened or created (permissions, disk full, etc.)
-    /// - Initialization transaction fails to begin or commit
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref();
+    /// Returns an error if the database cannot be opened or created.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let store = KvStore::file("~/.mik/kv.redb")?;
+    /// ```
+    pub fn file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let backend = RedbBackend::open(path)?;
+        Ok(Self {
+            backend: Arc::new(backend),
+        })
+    }
 
-        // Ensure parent directory exists before opening database
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create KV directory: {}", parent.display()))?;
+    /// Creates a new `KvStore` backed by an in-memory store.
+    ///
+    /// Ideal for testing, development, and embedded applications.
+    /// All data is lost when the process exits.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let store = KvStore::memory();
+    /// ```
+    pub fn memory() -> Self {
+        Self {
+            backend: Arc::new(MemoryBackend::new()),
         }
+    }
 
-        let db = Database::create(path)
-            .with_context(|| format!("Failed to open KV database: {}", path.display()))?;
-
-        // Initialize table on first open to ensure it exists for reads
-        let write_txn = db
-            .begin_write()
-            .context("Failed to begin initialization transaction")?;
-        {
-            let _table = write_txn
-                .open_table(KV_TABLE)
-                .context("Failed to initialize KV table")?;
+    /// Creates a new `KvStore` with a custom backend.
+    ///
+    /// Use this to integrate custom storage backends like Redis, PostgreSQL, etc.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// struct RedisBackend { /* ... */ }
+    /// impl KvBackend for RedisBackend { /* ... */ }
+    ///
+    /// let store = KvStore::custom(RedisBackend::new());
+    /// ```
+    pub fn custom<B: KvBackend>(backend: B) -> Self {
+        Self {
+            backend: Arc::new(backend),
         }
-        write_txn
-            .commit()
-            .context("Failed to commit initialization transaction")?;
+    }
 
-        Ok(Self { db: Arc::new(db) })
+    /// Creates a new `KvStore` from a boxed backend.
+    ///
+    /// Useful when working with trait objects directly.
+    pub fn from_boxed(backend: Box<dyn KvBackend>) -> Self {
+        Self {
+            backend: Arc::from(backend),
+        }
     }
 
     /// Retrieves a value by key.
     ///
-    /// Returns None if the key doesn't exist or has expired. Automatically
-    /// removes expired entries on access.
+    /// Returns `Ok(None)` if the key doesn't exist or has expired.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Database read transaction cannot begin
-    /// - Key lookup fails due to database corruption
-    /// - Entry deserialization fails (corrupted data)
-    pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let read_txn = self
-            .db
-            .begin_read()
-            .context("Failed to begin read transaction")?;
-
-        let table = read_txn
-            .open_table(KV_TABLE)
-            .context("Failed to open KV table")?;
-
-        let result = table
-            .get(key)
-            .with_context(|| format!("Failed to read key '{key}'"))?;
-
-        match result {
-            Some(guard) => {
-                let json = guard.value();
-                let entry: KvEntry = serde_json::from_slice(json)
-                    .with_context(|| format!("Failed to deserialize entry for key '{key}'"))?;
-
-                // Check expiration
-                if entry.is_expired()? {
-                    // Drop read transaction before starting write
-                    drop(table);
-                    drop(read_txn);
-
-                    // Remove expired entry
-                    self.delete(key)?;
-                    Ok(None)
-                } else {
-                    Ok(Some(entry.value))
-                }
-            },
-            None => Ok(None),
-        }
+    /// Returns an error if the underlying storage operation fails.
+    pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        self.backend.get(key).await
     }
 
-    /// Stores a key-value pair without expiration.
+    /// Stores a key-value pair with an optional TTL.
     ///
-    /// Overwrites existing value if key already exists.
+    /// If `ttl` is `Some(duration)`, the entry will expire after the
+    /// specified duration. If `None`, the entry never expires.
     ///
     /// # Errors
     ///
-    /// Returns an error if the write transaction cannot begin, the entry
-    /// cannot be serialized, or the transaction fails to commit.
-    pub fn set(&self, key: &str, value: &[u8]) -> Result<()> {
-        let entry = KvEntry::new(value.to_vec());
-        self.save_entry(key, &entry)
-    }
-
-    /// Stores a key-value pair with a TTL (time-to-live) in seconds.
-    ///
-    /// The entry will be automatically removed when accessed after expiration.
-    /// Overwrites existing value if key already exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the system time is before UNIX epoch, the write
-    /// transaction cannot begin, or the transaction fails to commit.
-    pub fn set_with_ttl(&self, key: &str, value: &[u8], ttl_secs: u64) -> Result<()> {
-        let entry = KvEntry::with_ttl(value.to_vec(), ttl_secs)?;
-        self.save_entry(key, &entry)
-    }
-
-    /// Internal helper to save an entry to the database.
-    pub(super) fn save_entry(&self, key: &str, entry: &KvEntry) -> Result<()> {
-        let write_txn = self
-            .db
-            .begin_write()
-            .context("Failed to begin write transaction")?;
-
-        {
-            let mut table = write_txn
-                .open_table(KV_TABLE)
-                .context("Failed to open KV table")?;
-
-            let json = serde_json::to_vec(entry).context("Failed to serialize entry to JSON")?;
-
-            table
-                .insert(key, json.as_slice())
-                .with_context(|| format!("Failed to insert key '{key}'"))?;
-        }
-
-        write_txn
-            .commit()
-            .context("Failed to commit set transaction")?;
-
-        Ok(())
+    /// Returns an error if the underlying storage operation fails.
+    pub async fn set(&self, key: &str, value: &[u8], ttl: Option<Duration>) -> Result<()> {
+        self.backend.set(key, value.to_vec(), ttl).await
     }
 
     /// Deletes a key-value pair.
     ///
-    /// Returns Ok(true) if the key existed and was removed, Ok(false) if
-    /// it didn't exist. Idempotent - safe to call multiple times.
+    /// Returns `Ok(true)` if the key existed, `Ok(false)` otherwise.
     ///
     /// # Errors
     ///
-    /// Returns an error if the write transaction cannot begin or commit.
-    pub fn delete(&self, key: &str) -> Result<bool> {
-        let write_txn = self
-            .db
-            .begin_write()
-            .context("Failed to begin write transaction")?;
-
-        let removed = {
-            let mut table = write_txn
-                .open_table(KV_TABLE)
-                .context("Failed to open KV table")?;
-
-            table
-                .remove(key)
-                .with_context(|| format!("Failed to remove key '{key}'"))?
-                .is_some()
-        };
-
-        write_txn
-            .commit()
-            .context("Failed to commit delete transaction")?;
-
-        Ok(removed)
-    }
-
-    /// Checks if a key exists and has not expired.
-    ///
-    /// Returns true if the key exists and is valid, false otherwise.
-    /// Automatically removes expired entries.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying `get` operation fails.
-    #[allow(dead_code)] // Standard KV API, kept for future use
-    pub fn exists(&self, key: &str) -> Result<bool> {
-        Ok(self.get(key)?.is_some())
+    /// Returns an error if the underlying storage operation fails.
+    pub async fn delete(&self, key: &str) -> Result<bool> {
+        self.backend.delete(key).await
     }
 
     /// Lists all keys matching an optional prefix.
     ///
-    /// Returns empty vec if no keys match. Automatically skips expired entries
-    /// and removes them. Pass None for prefix to list all keys.
+    /// # Errors
+    ///
+    /// Returns an error if the underlying storage operation fails.
+    pub async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>> {
+        self.backend.list(prefix).await
+    }
+
+    /// Checks if a key exists and has not expired.
     ///
     /// # Errors
     ///
-    /// Returns an error if the read transaction cannot begin or iteration fails.
-    pub fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>> {
-        let read_txn = self
-            .db
-            .begin_read()
-            .context("Failed to begin read transaction")?;
-
-        let table = read_txn
-            .open_table(KV_TABLE)
-            .context("Failed to open KV table")?;
-
-        let mut keys = Vec::new();
-        let mut expired_keys = Vec::new();
-
-        for item in table.iter().context("Failed to iterate KV table")? {
-            let (key, value) = item.context("Failed to read KV entry")?;
-            let key_str = key.value();
-
-            // Filter by prefix if provided
-            if let Some(prefix) = prefix
-                && !key_str.starts_with(prefix)
-            {
-                continue;
-            }
-
-            // Check expiration
-            if let Ok(entry) = serde_json::from_slice::<KvEntry>(value.value()) {
-                match entry.is_expired() {
-                    Ok(true) => {
-                        // Mark for deletion
-                        expired_keys.push(key_str.to_string());
-                    },
-                    Ok(false) => {
-                        // Valid entry
-                        keys.push(key_str.to_string());
-                    },
-                    Err(_) => {
-                        // Skip entries with time errors
-                    },
-                }
-            }
-        }
-
-        // Clean up expired keys (drop read transaction first)
-        drop(table);
-        drop(read_txn);
-
-        for key in expired_keys {
-            let _ = self.delete(&key); // Ignore errors during cleanup
-        }
-
-        Ok(keys)
+    /// Returns an error if the underlying storage operation fails.
+    pub async fn exists(&self, key: &str) -> Result<bool> {
+        self.backend.exists(key).await
     }
 
-    /// Clears all key-value pairs from the store.
+    // ========================================================================
+    // Legacy sync-style async methods (for backwards compatibility)
+    //
+    // These methods match the old API signature. They delegate to the new
+    // async methods but use different parameter types for compatibility.
+    // ========================================================================
+
+    /// Retrieves a value by key asynchronously.
     ///
-    /// This is primarily useful for testing. Use with caution in production.
-    #[cfg(test)]
-    pub fn clear(&self) -> Result<()> {
-        let write_txn = self
-            .db
-            .begin_write()
-            .context("Failed to begin write transaction")?;
+    /// Legacy method for backwards compatibility. Prefer using `get()` directly.
+    pub async fn get_async(&self, key: String) -> Result<Option<Vec<u8>>> {
+        self.get(&key).await
+    }
 
-        {
-            let mut table = write_txn
-                .open_table(KV_TABLE)
-                .context("Failed to open KV table")?;
+    /// Stores a key-value pair without expiration asynchronously.
+    ///
+    /// Legacy method for backwards compatibility. Prefer using `set()` directly.
+    pub async fn set_async(&self, key: String, value: Vec<u8>) -> Result<()> {
+        self.set(&key, &value, None).await
+    }
 
-            // Collect all keys first to avoid iterator invalidation
-            let keys: Vec<String> = table
-                .iter()
-                .context("Failed to iterate KV table")?
-                .filter_map(std::result::Result::ok)
-                .map(|(key, _)| key.value().to_string())
-                .collect();
+    /// Stores a key-value pair with a TTL asynchronously.
+    ///
+    /// Legacy method for backwards compatibility. Prefer using `set()` directly.
+    pub async fn set_with_ttl_async(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_secs: u64,
+    ) -> Result<()> {
+        self.set(&key, &value, Some(Duration::from_secs(ttl_secs)))
+            .await
+    }
 
-            // Remove all keys
-            for key in keys {
-                table
-                    .remove(key.as_str())
-                    .context("Failed to remove key during clear")?;
-            }
-        }
+    /// Deletes a key-value pair asynchronously.
+    ///
+    /// Legacy method for backwards compatibility. Prefer using `delete()` directly.
+    pub async fn delete_async(&self, key: String) -> Result<bool> {
+        self.delete(&key).await
+    }
 
-        write_txn
-            .commit()
-            .context("Failed to commit clear transaction")?;
-
-        Ok(())
+    /// Lists all keys matching an optional prefix asynchronously.
+    ///
+    /// Legacy method for backwards compatibility. Prefer using `list_keys()` directly.
+    pub async fn list_keys_async(&self, prefix: Option<String>) -> Result<Vec<String>> {
+        self.list_keys(prefix.as_deref()).await
     }
 }

@@ -42,10 +42,13 @@
 //!
 //! # Runtime
 //!
-//! The [`runtime`] module exposes the WASI HTTP host for integration testing:
+//! The [`runtime`] module exposes the WASI HTTP runtime for integration testing:
 //!
-//! - [`runtime::HostBuilder`] - Builder for creating a Host instance
-//! - [`runtime::Host`] - The WASI HTTP host that serves WASM components
+//! - [`runtime::Runtime`] - Core WASM runtime without network binding (library-first API)
+//! - [`runtime::Server`] - HTTP server wrapper for Runtime
+//! - [`runtime::RuntimeBuilder`] - Builder for creating a Runtime instance
+//! - [`runtime::Request`] / [`runtime::Response`] - Framework-agnostic HTTP types
+//! - [`runtime::Cluster`] / [`runtime::ClusterBuilder`] - Multi-worker orchestration
 //!
 //! # Example
 //!
@@ -73,14 +76,20 @@
 /// # Examples
 ///
 /// ```no_run
-/// use mik::runtime::HostBuilder;
-/// use std::net::SocketAddr;
+/// use mik::runtime::{Runtime, Request, Server};
 ///
 /// # async fn example() -> anyhow::Result<()> {
-/// let host = HostBuilder::from_manifest("mik.toml")?
+/// // Create a runtime (no network binding)
+/// let runtime = Runtime::builder()
+///     .modules_dir("modules/")
 ///     .build()?;
-/// let addr: SocketAddr = "127.0.0.1:3000".parse()?;
-/// host.serve(addr).await?;
+///
+/// // Option 1: Handle requests programmatically
+/// let response = runtime.handle_request(Request::new("GET", "/run/hello/")).await?;
+///
+/// // Option 2: Use with the built-in server
+/// let server = Server::new(runtime, "127.0.0.1:3000".parse()?);
+/// server.serve().await?;
 /// # Ok(())
 /// # }
 /// ```

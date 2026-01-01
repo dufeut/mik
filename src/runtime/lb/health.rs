@@ -7,6 +7,7 @@
 //!
 //! - [`HealthCheckConfig`] - Configuration for health check behavior (interval, timeout, thresholds)
 //! - [`HealthCheckType`] - Enum for HTTP (path-based) or TCP (connection-based) checks
+//! - [`HealthChecker`] - Service for running health checks (used by Proxy)
 //!
 //! Health checks run in a background task and automatically update backend health status.
 
@@ -21,7 +22,7 @@ use tracing::{debug, info, warn};
 
 use anyhow::{Context, Result};
 
-use super::Backend;
+use super::backend::Backend;
 use super::metrics::LbMetrics;
 
 /// Type of health check to perform.
@@ -130,54 +131,37 @@ impl HealthCheck {
     }
 
     /// Check the health of a single backend.
+    ///
+    /// For HTTP backends, performs either HTTP or TCP health checks based on config.
+    /// For Runtime backends, delegates to the runtime's health_check method.
     pub(super) async fn check(&self, backend: &Backend) -> bool {
-        match &self.config.check_type {
-            HealthCheckType::Http { path } => self.check_http(backend, path).await,
-            HealthCheckType::Tcp => self.check_tcp(backend).await,
-        }
-    }
+        // Get HTTP client for HTTP backends
+        let client = self.client.as_ref();
 
-    /// Perform an HTTP health check.
-    async fn check_http(&self, backend: &Backend, path: &str) -> bool {
-        // SAFETY: `client` is always `Some` when `check_type` is `Http`.
-        // This invariant is established in `new()` where we create the client
-        // only for HTTP health checks, and `check_http` is only called when
-        // `check_type` is `Http` (see the match in `check()`).
-        let client = self
-            .client
-            .as_ref()
-            .expect("HTTP client should exist for HTTP health checks - invariant violation");
-        let url = backend.url(path);
-
-        match client.get(&url).send().await {
-            Ok(response) => {
-                let healthy = response.status().is_success();
-                if healthy {
-                    debug!(backend = %backend.address(), "HTTP health check passed");
-                } else {
-                    debug!(
-                        backend = %backend.address(),
-                        status = %response.status(),
-                        "HTTP health check failed with status"
-                    );
+        match backend {
+            Backend::Http(http_backend) => {
+                match &self.config.check_type {
+                    HealthCheckType::Http { path } => {
+                        if let Some(client) = client {
+                            http_backend.health_check(client, path).await
+                        } else {
+                            // Should not happen due to invariant in new()
+                            debug!(backend = %http_backend.address(), "No HTTP client for health check");
+                            false
+                        }
+                    },
+                    HealthCheckType::Tcp => self.check_tcp_address(http_backend.address()).await,
                 }
-                healthy
             },
-            Err(e) => {
-                debug!(
-                    backend = %backend.address(),
-                    error = %e,
-                    "HTTP health check failed"
-                );
-                false
+            Backend::Runtime(runtime_backend) => {
+                // Runtime backends use their own health check
+                runtime_backend.health_check().await
             },
         }
     }
 
-    /// Perform a TCP health check by attempting to connect to the backend.
-    async fn check_tcp(&self, backend: &Backend) -> bool {
-        let address = backend.address();
-
+    /// Perform a TCP health check by attempting to connect to an address.
+    async fn check_tcp_address(&self, address: &str) -> bool {
         // Resolve the address to a SocketAddr
         let socket_addr = match address.to_socket_addrs() {
             Ok(mut addrs) => {
@@ -227,20 +211,43 @@ impl HealthCheck {
     }
 }
 
-/// Run continuous health checks for all backends.
+/// Health checker service for use with Proxy.
 ///
-/// # Panics
-///
-/// Panics if the health check service cannot be created (e.g., TLS configuration issues).
-/// This is acceptable because health checks run in a background task spawned by the load balancer,
-/// and a failure to create the health checker is a fatal configuration error.
-pub(super) async fn run_health_checks(
+/// This struct wraps `HealthCheckConfig` and provides a `run` method that can be
+/// spawned as a background task. It's designed to work with the new `Backend` enum
+/// that supports both HTTP and Runtime backends.
+pub struct HealthChecker {
+    config: HealthCheckConfig,
+}
+
+impl HealthChecker {
+    /// Create a new health checker with the given configuration.
+    pub fn new(config: HealthCheckConfig) -> Self {
+        Self { config }
+    }
+
+    /// Run continuous health checks for all backends.
+    ///
+    /// This method runs forever, performing health checks at the configured interval.
+    /// It updates backend health status and metrics.
+    pub async fn run(&self, backends: Arc<RwLock<Vec<Backend>>>, metrics: LbMetrics) {
+        run_health_checks_internal(backends, self.config.clone(), metrics).await;
+    }
+
+    /// Get the health check configuration.
+    pub fn config(&self) -> &HealthCheckConfig {
+        &self.config
+    }
+}
+
+/// Internal implementation of health check loop.
+async fn run_health_checks_internal(
     backends: Arc<RwLock<Vec<Backend>>>,
     config: HealthCheckConfig,
+    metrics: LbMetrics,
 ) {
     let health_check = HealthCheck::new(config.clone())
         .expect("failed to create health check service - check TLS configuration");
-    let metrics = LbMetrics::new();
     let mut interval = tokio::time::interval(config.interval);
 
     match &config.check_type {
@@ -278,7 +285,7 @@ pub(super) async fn run_health_checks(
                 backend.mark_healthy();
                 if backend.success_count() >= u64::from(config.healthy_threshold) && !was_healthy {
                     info!(
-                        backend = %backend.address(),
+                        backend = %backend.id(),
                         index = i,
                         "Backend recovered and marked healthy"
                     );
@@ -287,7 +294,7 @@ pub(super) async fn run_health_checks(
                 backend.mark_unhealthy();
                 if backend.failure_count() >= u64::from(config.unhealthy_threshold) && was_healthy {
                     warn!(
-                        backend = %backend.address(),
+                        backend = %backend.id(),
                         index = i,
                         failures = backend.failure_count(),
                         "Backend marked unhealthy after consecutive failures"
@@ -315,7 +322,7 @@ pub(super) async fn run_health_checks(
         metrics.update_backend_metrics(
             backends_snapshot
                 .iter()
-                .map(|b| (b.address(), b.is_healthy(), b.active_requests())),
+                .map(|b| (b.id(), b.is_healthy(), b.active_requests())),
         );
     }
 }
@@ -408,7 +415,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         // Create backend and health check
-        let backend = Backend::new(addr.to_string());
+        let backend = Backend::http(addr.to_string());
         let config = HealthCheckConfig {
             timeout: Duration::from_millis(100),
             ..HealthCheckConfig::tcp()
@@ -432,7 +439,7 @@ mod tests {
         drop(listener); // Close the listener so the port is closed
 
         // Create backend and health check
-        let backend = Backend::new(addr.to_string());
+        let backend = Backend::http(addr.to_string());
         let config = HealthCheckConfig {
             timeout: Duration::from_millis(100),
             ..HealthCheckConfig::tcp()
@@ -447,7 +454,7 @@ mod tests {
     #[tokio::test]
     async fn test_tcp_health_check_fails_on_invalid_address() {
         // Use an invalid address
-        let backend = Backend::new("invalid-host:12345".to_string());
+        let backend = Backend::http("invalid-host:12345");
         let config = HealthCheckConfig {
             timeout: Duration::from_millis(100),
             ..HealthCheckConfig::tcp()
@@ -463,7 +470,7 @@ mod tests {
     async fn test_tcp_health_check_respects_timeout() {
         // Use a non-routable address to trigger timeout
         // 10.255.255.1 is typically non-routable and will cause a timeout
-        let backend = Backend::new("10.255.255.1:12345".to_string());
+        let backend = Backend::http("10.255.255.1:12345");
         let config = HealthCheckConfig {
             timeout: Duration::from_millis(50), // Very short timeout
             ..HealthCheckConfig::tcp()

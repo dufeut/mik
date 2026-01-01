@@ -1,35 +1,81 @@
 //! L7 Load Balancer for mik runtime.
 //!
 //! This module provides an HTTP load balancer that distributes requests across
-//! multiple backend workers using round-robin selection with health checks.
+//! multiple backend workers using various selection strategies with health checks.
 //!
 //! # Architecture
 //!
+//! The load balancer is designed for both CLI use and embedding:
+//!
 //! ```text
-//! [Client] -> [L7 LB :3000] -> [Worker :3001]
-//!                           -> [Worker :3002]
-//!                           -> [Worker :3003]
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                      LoadBalancer (server.rs)                   │
+//! │  - Network binding and HTTP serving                             │
+//! │  - CLI-facing API                                               │
+//! ├─────────────────────────────────────────────────────────────────┤
+//! │                         Proxy (proxy.rs)                        │
+//! │  - Core request forwarding logic                                │
+//! │  - Backend selection (round-robin, weighted, etc.)              │
+//! │  - Health checking coordination                                 │
+//! │  - NO network binding (embeddable)                              │
+//! ├─────────────────────────────────────────────────────────────────┤
+//! │                      Backend (backend.rs)                       │
+//! │  - Backend::Http - network backends                             │
+//! │  - Backend::Runtime - embedded runtime backends                 │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Usage
+//!
+//! ## CLI Use (with network binding)
+//!
+//! ```ignore
+//! use mik::runtime::lb::LoadBalancer;
+//!
+//! let lb = LoadBalancer::builder()
+//!     .listen("0.0.0.0:8080".parse()?)
+//!     .backend("127.0.0.1:3001")
+//!     .backend("127.0.0.1:3002")
+//!     .build()?;
+//!
+//! lb.serve().await?;
+//! ```
+//!
+//! ## Embedded Use (no network binding)
+//!
+//! ```ignore
+//! use mik::runtime::lb::{Proxy, Backend};
+//!
+//! let proxy = Proxy::builder()
+//!     .backend(Backend::http("127.0.0.1:3001"))
+//!     .backend(Backend::runtime(my_runtime))
+//!     .build()?;
+//!
+//! // Forward requests programmatically
+//! let response = proxy.forward(request).await?;
 //! ```
 
-mod backend;
+pub mod backend;
 mod circuit_breaker;
-mod health;
+pub mod health;
 pub mod metrics;
-mod proxy;
-mod selection;
+pub mod proxy;
+pub mod selection;
+pub mod server;
 
-pub use backend::Backend;
-pub use health::{HealthCheckConfig, HealthCheckType};
-pub use proxy::ProxyService;
-pub use selection::RoundRobin;
+// Re-export main types for convenience
+pub use backend::{
+    Backend, BackendHealth, BackendType, HttpBackend, RuntimeBackend, RuntimeHandler,
+};
+pub use health::{HealthCheckConfig, HealthCheckType, HealthChecker};
+pub use proxy::{Proxy, ProxyBuilder, Request, Response};
+pub use selection::{LoadBalanceStrategy, RoundRobin, Selection};
+pub use server::{LoadBalancer, LoadBalancerBuilder};
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use tokio::sync::RwLock;
-use tracing::info;
+use anyhow::Result;
 
 use crate::manifest::LbConfig;
 
@@ -38,6 +84,9 @@ use crate::manifest::LbConfig;
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:3000";
 
 /// Configuration for the load balancer.
+///
+/// This is the legacy configuration struct for backward compatibility.
+/// For new code, prefer using `LoadBalancerBuilder` directly.
 #[derive(Debug, Clone)]
 pub struct LoadBalancerConfig {
     /// Address to listen on.
@@ -135,96 +184,36 @@ impl LoadBalancerConfig {
             http2_only: lb_config.http2_only,
         }
     }
-}
 
-/// L7 Load Balancer.
-///
-/// Distributes HTTP requests across multiple backend workers using
-/// round-robin selection with health-check-based failover.
-pub struct LoadBalancer {
-    config: LoadBalancerConfig,
-    backends: Arc<RwLock<Vec<Backend>>>,
-    selection: Arc<RwLock<RoundRobin>>,
-    client: reqwest::Client,
-}
+    /// Convert this config into a `LoadBalancerBuilder`.
+    pub fn into_builder(self) -> LoadBalancerBuilder {
+        let mut builder = LoadBalancer::builder()
+            .listen(self.listen_addr)
+            .health_check(Some(self.health_check))
+            .request_timeout(self.request_timeout)
+            .max_connections_per_backend(self.max_connections_per_backend)
+            .pool_idle_timeout(Duration::from_secs(self.pool_idle_timeout_secs))
+            .tcp_keepalive(Duration::from_secs(self.tcp_keepalive_secs))
+            .http2_only(self.http2_only);
 
-impl LoadBalancer {
-    /// Create a new load balancer with the given configuration.
+        for backend in self.backends {
+            builder = builder.backend(backend);
+        }
+
+        builder
+    }
+
+    /// Build and serve the load balancer.
+    ///
+    /// This is a convenience method that creates a `LoadBalancer` from this config
+    /// and immediately starts serving.
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP client cannot be created (e.g., TLS configuration issues).
-    pub fn new(config: LoadBalancerConfig) -> Result<Self> {
-        let backends: Vec<Backend> = config
-            .backends
-            .iter()
-            .map(|addr| Backend::new(addr.clone()))
-            .collect();
-
-        let selection = RoundRobin::new(backends.len());
-
-        // Create HTTP client with connection pooling and HTTP/2 support
-        let mut client_builder = reqwest::Client::builder()
-            .timeout(config.request_timeout)
-            .pool_max_idle_per_host(config.max_connections_per_backend)
-            .pool_idle_timeout(Duration::from_secs(config.pool_idle_timeout_secs))
-            .tcp_keepalive(Duration::from_secs(config.tcp_keepalive_secs));
-
-        // Enable HTTP/2 with prior knowledge for local backends
-        // This provides better performance through multiplexing when backends support HTTP/2
-        if config.http2_only {
-            client_builder = client_builder.http2_prior_knowledge();
-        }
-
-        let client = client_builder
-            .build()
-            .context("failed to create HTTP client - check TLS configuration")?;
-
-        Ok(Self {
-            config,
-            backends: Arc::new(RwLock::new(backends)),
-            selection: Arc::new(RwLock::new(selection)),
-            client,
-        })
-    }
-
-    /// Start the load balancer.
-    ///
-    /// This will:
-    /// 1. Start background health checks
-    /// 2. Listen for incoming HTTP requests
-    /// 3. Proxy requests to healthy backends
+    /// Returns an error if the load balancer cannot be created or if serving fails.
     pub async fn serve(self) -> Result<()> {
-        let addr = self.config.listen_addr;
-        let backends = self.backends.clone();
-        let health_config = self.config.health_check.clone();
-
-        // Start health check background task
-        let health_backends = backends.clone();
-        tokio::spawn(async move {
-            health::run_health_checks(health_backends, health_config).await;
-        });
-
-        info!("L7 Load Balancer listening on http://{}", addr);
-
-        // Log backends
-        {
-            let backends = backends.read().await;
-            for (i, backend) in backends.iter().enumerate() {
-                info!("  Backend {}: {}", i + 1, backend.address());
-            }
-        }
-
-        // Create and run the proxy service
-        let proxy = ProxyService::with_http2(
-            backends,
-            self.selection,
-            self.client,
-            self.config.request_timeout,
-            self.config.http2_only,
-        );
-
-        proxy.serve(addr).await
+        let lb = self.into_builder().build()?;
+        lb.serve().await
     }
 }
 
@@ -345,5 +334,17 @@ mod tests {
                 "Failed for health_check_type: {health_check_type}"
             );
         }
+    }
+
+    #[test]
+    fn test_config_into_builder() {
+        let config = LoadBalancerConfig {
+            listen_addr: "127.0.0.1:8080".parse().unwrap(),
+            backends: vec!["127.0.0.1:3001".to_string(), "127.0.0.1:3002".to_string()],
+            ..Default::default()
+        };
+
+        let lb = config.into_builder().build();
+        assert!(lb.is_ok());
     }
 }

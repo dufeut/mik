@@ -3,10 +3,54 @@
 #![allow(clippy::cast_possible_truncation)]
 //!
 //! This module provides the core functionality for running WASI HTTP components.
-//! Use [`HostBuilder`] to configure and create a host, then call [`Host::serve`].
+//!
+//! # Library-First API
+//!
+//! The runtime provides a clean separation between:
+//! - [`Runtime`]: Core WASM execution engine, no network binding
+//! - [`Server`]: HTTP server that wraps a Runtime
+//!
+//! This allows mik to be embedded in applications like Tauri, Electron, or custom servers.
+//!
+//! # Examples
+//!
+//! ## Standalone Server (CLI use case)
+//!
+//! ```no_run
+//! use mik::runtime::{Runtime, Server};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let runtime = Runtime::builder()
+//!     .modules_dir("modules/")
+//!     .build()?;
+//!
+//! Server::new(runtime, "127.0.0.1:3000".parse()?)
+//!     .serve()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Embedded Runtime (library use case)
+//!
+//! ```no_run
+//! use mik::runtime::{Runtime, Request};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let runtime = Runtime::builder()
+//!     .modules_dir("modules/")
+//!     .build()?;
+//!
+//! // Handle requests programmatically
+//! let response = runtime.handle_request(Request::new("GET", "/run/hello/greet")).await?;
+//! println!("Status: {}", response.status);
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod aot_cache;
 pub mod builder;
+pub mod cluster;
 pub mod compression;
 pub mod endpoints;
 pub mod error;
@@ -14,39 +58,40 @@ pub mod host_config;
 pub mod host_state;
 pub mod lb;
 pub mod reliability;
+pub mod request;
 pub mod request_handler;
 pub mod script;
 pub mod security;
+pub mod server;
 pub mod spans;
 pub mod static_files;
 pub mod types;
 pub mod wasm_executor;
 
-// Re-export types for backward compatibility
-// Note: Some re-exports may appear unused but are part of the public API
-pub use builder::HostBuilder;
+// Re-export main builder type
+pub use builder::RuntimeBuilder;
 pub use host_config::{DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_SHUTDOWN_TIMEOUT_SECS, HostConfig};
+// New library-first API types
+pub use request::{Request, Response};
 pub use request_handler::handle_request;
+pub use server::{Server, ServerBuilder};
 #[allow(unused_imports)]
 pub use static_files::guess_content_type;
 #[allow(unused_imports)]
 pub use types::{ErrorCategory, HealthDetail, HealthStatus, MemoryStats};
+// Cluster orchestration
+pub use cluster::{Cluster, ClusterBuilder, WorkerHandle};
 
 use crate::constants;
 use anyhow::{Context, Result};
 use host_state::HostState;
-use hyper::service::service_fn;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder as HttpConnectionBuilder;
 use moka::sync::Cache as MokaCache;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 
@@ -83,10 +128,6 @@ pub const DEFAULT_MAX_CACHE_MB: usize = constants::DEFAULT_CACHE_MB;
 
 /// Default max concurrent requests per module.
 pub const DEFAULT_MAX_PER_MODULE_REQUESTS: usize = constants::DEFAULT_MAX_PER_MODULE_REQUESTS;
-
-/// Shutdown polling interval in milliseconds.
-/// How frequently to check if active connections have completed during shutdown.
-const SHUTDOWN_POLL_INTERVAL_MS: u64 = 100;
 
 // NOTE: is_http_host_allowed is imported from reliability::security
 // This is the single source of truth used by both host and mik CLI.
@@ -374,33 +415,14 @@ impl SharedState {
     }
 }
 
-/// WASI HTTP host that serves WASM components.
+/// Internal WASM host that manages the wasmtime engine and module cache.
 ///
-/// The host manages the wasmtime engine, module cache, and HTTP server.
-/// Use [`HostBuilder`] to create instances.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mik::runtime::HostBuilder;
-/// use std::net::SocketAddr;
-///
-/// #[tokio::main]
-/// async fn main() -> anyhow::Result<()> {
-///     let host = HostBuilder::new()
-///         .modules_dir("modules/")
-///         .port(3000)
-///         .build()?;
-///
-///     // Start serving HTTP requests
-///     let addr: SocketAddr = "127.0.0.1:3000".parse()?;
-///     host.serve(addr).await
-/// }
-/// ```
-pub struct Host {
-    shared: Arc<SharedState>,
+/// This is an internal type used by [`RuntimeBuilder`] to set up the wasmtime
+/// environment. Use [`Runtime`] for the public API.
+pub(crate) struct Host {
+    pub(crate) shared: Arc<SharedState>,
     /// Shutdown signal for the epoch incrementer thread.
-    epoch_shutdown: Arc<AtomicBool>,
+    pub(crate) epoch_shutdown: Arc<AtomicBool>,
 }
 
 impl Host {
@@ -616,184 +638,453 @@ impl Host {
             epoch_shutdown,
         })
     }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        // Signal the epoch incrementer thread to stop
+        self.epoch_shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+// =============================================================================
+// Runtime: Library-First API
+// =============================================================================
+
+/// Core WASM runtime without network binding.
+///
+/// This is the library-first API for mik. `Runtime` handles requests programmatically,
+/// making it suitable for embedding in applications like Tauri, Electron, or custom servers.
+/// Use [`Server`] to wrap a Runtime for HTTP serving.
+///
+/// # Examples
+///
+/// ## Programmatic Request Handling
+///
+/// ```no_run
+/// use mik::runtime::{Runtime, Request};
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let runtime = Runtime::builder()
+///     .modules_dir("modules/")
+///     .build()?;
+///
+/// // Handle a request without any HTTP server
+/// let response = runtime.handle_request(
+///     Request::new("GET", "/run/hello/greet")
+/// ).await?;
+///
+/// println!("Status: {}, Body: {:?}", response.status, response.body_str());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// ## Integration with Custom HTTP Server
+///
+/// ```no_run
+/// use mik::runtime::{Runtime, Request, Response};
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let runtime = std::sync::Arc::new(
+///     Runtime::builder()
+///         .modules_dir("modules/")
+///         .build()?
+/// );
+///
+/// // Use with any HTTP framework (axum, actix, warp, etc.)
+/// // let axum_handler = move |req: axum::Request| {
+/// //     let runtime = runtime.clone();
+/// //     async move {
+/// //         let mik_req = Request::from(req);
+/// //         runtime.handle_request(mik_req).await
+/// //     }
+/// // };
+/// # Ok(())
+/// # }
+/// ```
+pub struct Runtime {
+    /// Shared state containing engine, linker, cache, config.
+    pub(crate) shared: Arc<SharedState>,
+    /// Shutdown signal for the epoch incrementer thread.
+    epoch_shutdown: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for Runtime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runtime")
+            .field("port", &self.shared.config.port)
+            .field("modules_path", &self.shared.modules_dir)
+            .field("single_component", &self.shared.single_component_name)
+            .field("cache_size", &self.shared.cache.entry_count())
+            .field(
+                "is_shutting_down",
+                &self.shared.shutdown.load(Ordering::Relaxed),
+            )
+            .finish()
+    }
+}
+
+impl Runtime {
+    /// Create a new runtime builder.
+    ///
+    /// This is the recommended way to create a `Runtime` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mik::runtime::Runtime;
+    ///
+    /// # fn example() -> anyhow::Result<()> {
+    /// let runtime = Runtime::builder()
+    ///     .modules_dir("modules/")
+    ///     .cache_size(100)
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn builder() -> builder::RuntimeBuilder {
+        builder::RuntimeBuilder::new()
+    }
+
+    /// Create a runtime from a Host (internal conversion).
+    pub(crate) fn from_host(host: Host) -> Self {
+        Self {
+            shared: host.shared.clone(),
+            epoch_shutdown: host.epoch_shutdown.clone(),
+        }
+    }
+
+    /// Handle an HTTP request programmatically.
+    ///
+    /// This is the core method for the library-first API. It processes a request
+    /// through the WASM runtime and returns a response, without any network I/O.
+    ///
+    /// # Arguments
+    ///
+    /// * `req` - The request to handle
+    ///
+    /// # Returns
+    ///
+    /// The response from the WASM handler, or an error if processing failed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mik::runtime::{Runtime, Request};
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let runtime = Runtime::builder()
+    ///     .modules_dir("modules/")
+    ///     .build()?;
+    ///
+    /// let response = runtime.handle_request(
+    ///     Request::new("POST", "/run/api/users")
+    ///         .with_header("Content-Type", "application/json")
+    ///         .with_body_str(r#"{"name": "Alice"}"#)
+    /// ).await?;
+    ///
+    /// if response.is_success() {
+    ///     println!("User created: {}", response.body_str()?);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn handle_request(&self, req: request::Request) -> Result<request::Response> {
+        use http_body_util::Full;
+        use hyper::body::Bytes;
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Convert our Request to hyper request format
+        let mut hyper_req = hyper::Request::builder()
+            .method(req.method.as_str())
+            .uri(&req.path);
+
+        for (name, value) in &req.headers {
+            hyper_req = hyper_req.header(name.as_str(), value.as_str());
+        }
+
+        // Create body
+        let body = Full::new(Bytes::from(req.body));
+        let hyper_req = hyper_req.body(body)?;
+
+        // Use a dummy remote address for programmatic requests
+        let remote_addr = std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+
+        // Process the request through our internal handler
+        let result = self.handle_request_internal(hyper_req, remote_addr).await?;
+
+        // Convert hyper response back to our Response type
+        let status = result.status().as_u16();
+        let headers: Vec<(String, String)> = result
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.to_string(), v.to_string()))
+            })
+            .collect();
+
+        // Extract body bytes from Full<Bytes>
+        use http_body_util::BodyExt;
+        let body_bytes = result
+            .into_body()
+            .collect()
+            .await
+            .map(|c| c.to_bytes().to_vec())
+            .unwrap_or_default();
+
+        Ok(request::Response {
+            status,
+            headers,
+            body: body_bytes,
+        })
+    }
+
+    /// Internal request handling that works with Full<Bytes> body.
+    async fn handle_request_internal(
+        &self,
+        req: hyper::Request<http_body_util::Full<hyper::body::Bytes>>,
+        _remote_addr: std::net::SocketAddr,
+    ) -> Result<hyper::Response<http_body_util::Full<hyper::body::Bytes>>> {
+        use crate::runtime::compression::maybe_compress_response;
+        use crate::runtime::error;
+        use crate::runtime::host_state::HyperCompatibleBody;
+        use crate::runtime::request_handler::{
+            error_response, not_found, parse_module_route, validate_content_length,
+            validate_path_length,
+        };
+        use crate::runtime::static_files::serve_static_file;
+        use crate::runtime::wasm_executor::execute_wasm_request;
+        use http_body_util::Full;
+        use hyper::body::Bytes;
+        use uuid::Uuid;
+
+        let request_id = Uuid::new_v4();
+        let path = req.uri().path().to_string();
+
+        // Trace ID from header or generate new
+        let trace_id = req
+            .headers()
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map_or_else(|| request_id.to_string(), String::from);
+
+        self.shared.request_counter.fetch_add(1, Ordering::Relaxed);
+
+        let client_accepts_gzip = req
+            .headers()
+            .get("accept-encoding")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("gzip"));
+
+        // Handle built-in endpoints
+        if path == HEALTH_PATH {
+            // Convert Full<Bytes> to Incoming for health endpoint
+            // For now, create a simple health response directly
+            let health = self.shared.get_health_status(types::HealthDetail::Summary);
+            let body = serde_json::to_string_pretty(&health)
+                .unwrap_or_else(|_| r#"{"status":"error"}"#.to_string());
+
+            let response = hyper::Response::builder()
+                .status(200)
+                .header("Content-Type", "application/json")
+                .header("X-Request-ID", request_id.to_string())
+                .header("X-Trace-ID", &trace_id)
+                .body(Full::new(Bytes::from(body)))?;
+
+            return Ok(maybe_compress_response(response, client_accepts_gzip));
+        }
+
+        if path == METRICS_PATH {
+            let metrics = self.shared.get_prometheus_metrics();
+
+            let response = hyper::Response::builder()
+                .status(200)
+                .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                .header("X-Request-ID", request_id.to_string())
+                .header("X-Trace-ID", &trace_id)
+                .body(Full::new(Bytes::from(metrics)))?;
+
+            return Ok(maybe_compress_response(response, client_accepts_gzip));
+        }
+
+        // Validate path length
+        if let Some(resp) = validate_path_length(&path) {
+            return Ok(resp);
+        }
+
+        // Check Content-Length header
+        let max_body = self.shared.max_body_size_bytes;
+        if let Some(resp) = validate_content_length(req.headers(), max_body) {
+            return Ok(resp);
+        }
+
+        // Handle static file requests
+        if path.starts_with(STATIC_PREFIX) {
+            return match &self.shared.static_dir {
+                Some(dir) => serve_static_file(dir, &path)
+                    .await
+                    .map(|resp| maybe_compress_response(resp, client_accepts_gzip)),
+                None => not_found("Static file serving not enabled"),
+            };
+        }
+
+        // Handle /run/ module requests
+        let Some(run_path) = path.strip_prefix(RUN_PREFIX) else {
+            return not_found("Not found. WASM modules are served at /run/<module>/");
+        };
+
+        let (module, handler_path) = parse_module_route(run_path);
+
+        if module.is_empty() {
+            return not_found("No module specified. Use /run/<module>/");
+        }
+
+        // Resolve module
+        let (component, module_name, module_permit) = {
+            // Single component mode
+            if let (Some(comp), Some(expected_name)) = (
+                &self.shared.single_component,
+                &self.shared.single_component_name,
+            ) {
+                if module == *expected_name {
+                    (comp.clone(), Some(module), None)
+                } else {
+                    let err = error::Error::module_not_found(&module);
+                    return error_response(&err);
+                }
+            } else {
+                // Multi-module mode: check circuit breaker
+                if let Err(e) = self.shared.circuit_breaker.check_request(&module) {
+                    tracing::warn!("Circuit breaker blocked request to '{}': {}", module, e);
+                    let err = error::Error::circuit_breaker_open(&module);
+                    let mut resp = error_response(&err)?;
+                    resp.headers_mut()
+                        .insert("Retry-After", "30".parse().expect("valid header value"));
+                    return Ok(resp);
+                }
+
+                // Acquire per-module semaphore permit
+                let module_semaphore = self.shared.get_module_semaphore(&module);
+                let module_permit = if let Ok(permit) = module_semaphore.try_acquire_owned() {
+                    Some(permit)
+                } else {
+                    tracing::warn!(
+                        "Module '{}' overloaded (max {} concurrent requests)",
+                        module,
+                        self.shared.config.max_per_module_requests
+                    );
+                    let err = error::Error::rate_limit_exceeded(format!(
+                        "Module '{}' overloaded (max {} concurrent)",
+                        module, self.shared.config.max_per_module_requests
+                    ));
+                    let mut resp = error_response(&err)?;
+                    resp.headers_mut()
+                        .insert("Retry-After", "5".parse().expect("valid header value"));
+                    return Ok(resp);
+                };
+
+                match self.shared.get_or_load(&module).await {
+                    Ok(comp) => (comp, Some(module.clone()), module_permit),
+                    Err(e) => {
+                        tracing::warn!("Module load failed: {}", e);
+                        self.shared.circuit_breaker.record_failure(&module);
+                        let err = error::Error::module_not_found(&module);
+                        return error_response(&err);
+                    },
+                }
+            }
+        };
+
+        // Rebuild request with new path
+        let (parts, body) = req.into_parts();
+        let mut new_parts = parts.clone();
+
+        // Update URI with handler path
+        let mut uri_parts = new_parts.uri.into_parts();
+        uri_parts.path_and_query = Some(handler_path.parse()?);
+        new_parts.uri = hyper::Uri::from_parts(uri_parts)?;
+
+        let req = hyper::Request::from_parts(new_parts, HyperCompatibleBody(body));
+
+        // Execute WASM request
+        let _module_permit = module_permit;
+        let result = execute_wasm_request(self.shared.clone(), component, req).await;
+
+        // Record success/failure in circuit breaker
+        if let Some(ref module) = module_name {
+            match &result {
+                Ok(_) => self.shared.circuit_breaker.record_success(module),
+                Err(_) => self.shared.circuit_breaker.record_failure(module),
+            }
+        }
+
+        result.map(|resp| maybe_compress_response(resp, client_accepts_gzip))
+    }
+
+    /// Get the health status of the runtime.
+    ///
+    /// Returns information about cache usage, request counts, and memory.
+    #[must_use]
+    pub fn health(&self) -> types::HealthStatus {
+        self.shared.get_health_status(types::HealthDetail::Full)
+    }
+
+    /// Get Prometheus-format metrics.
+    #[must_use]
+    pub fn metrics(&self) -> String {
+        self.shared.get_prometheus_metrics()
+    }
 
     /// Check if running in single component mode.
-    #[allow(dead_code)]
+    #[must_use]
     pub fn is_single_component(&self) -> bool {
         self.shared.single_component.is_some()
     }
 
     /// Get the single component name (for routing).
+    #[must_use]
     pub fn single_component_name(&self) -> Option<&str> {
         self.shared.single_component_name.as_deref()
     }
 
     /// Check if static file serving is enabled.
+    #[must_use]
     pub fn has_static_files(&self) -> bool {
         self.shared.static_dir.is_some()
     }
 
-    /// Start serving HTTP requests on the given address.
-    pub async fn serve(self, addr: SocketAddr) -> Result<()> {
-        let listener = TcpListener::bind(addr).await?;
-        info!("Serving on http://{}", addr);
-        info!("Health endpoint: {}", HEALTH_PATH);
-        info!("Metrics endpoint: {}", METRICS_PATH);
+    /// Get the configured port (from manifest or builder).
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        self.shared.config.port
+    }
 
-        if let Some(name) = self.single_component_name() {
-            info!("Routes: /run/{}/* -> component", name);
-        } else {
-            info!("Routes: /run/<module>/* -> <module>.wasm");
-        }
+    /// Get a reference to the shared state (for advanced use cases).
+    #[must_use]
+    pub fn shared(&self) -> &Arc<SharedState> {
+        &self.shared
+    }
 
-        if self.has_static_files() {
-            info!("Routes: /static/<project>/* -> static files");
-        }
+    /// Trigger a graceful shutdown.
+    ///
+    /// This sets the shutdown flag, which will cause any running server
+    /// to begin its shutdown sequence.
+    pub fn shutdown(&self) {
+        self.shared.shutdown.store(true, Ordering::SeqCst);
+    }
 
-        if let Some(ref scripts_dir) = self.shared.scripts_dir {
-            info!("Routes: /script/<name> -> {:?}", scripts_dir);
-        }
-
-        // Setup graceful shutdown
-        let shutdown_signal = self.shared.shutdown.clone();
-        let mut shutdown_handle = tokio::spawn(async move {
-            // Wait for SIGTERM/SIGINT
-            #[cfg(unix)]
-            {
-                use tokio::signal::unix::{SignalKind, signal};
-                let mut sigterm =
-                    signal(SignalKind::terminate()).expect("Failed to setup SIGTERM handler");
-                let mut sigint =
-                    signal(SignalKind::interrupt()).expect("Failed to setup SIGINT handler");
-
-                tokio::select! {
-                    _ = sigterm.recv() => {
-                        info!("Received SIGTERM");
-                    }
-                    _ = sigint.recv() => {
-                        info!("Received SIGINT");
-                    }
-                }
-            }
-
-            #[cfg(not(unix))]
-            {
-                // Windows/other platforms - use ctrl_c
-                if let Err(e) = tokio::signal::ctrl_c().await {
-                    error!("Failed to listen for ctrl_c: {}", e);
-                    return;
-                }
-                info!("Received Ctrl+C");
-            }
-
-            // Set shutdown flag
-            shutdown_signal.store(true, Ordering::SeqCst);
-        });
-
-        // Track active connection tasks
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let active_connections = Arc::new(AtomicU64::new(0));
-
-        loop {
-            tokio::select! {
-                // Accept new connections
-                accept_result = listener.accept() => {
-                    let (stream, remote_addr) = accept_result?;
-
-                    // Check if shutdown has been initiated
-                    if self.shared.shutdown.load(Ordering::SeqCst) {
-                        debug!("Rejecting new connection during shutdown");
-                        break;
-                    }
-
-                    let io = TokioIo::new(stream);
-                    let shared = self.shared.clone();
-                    let active_conns = active_connections.clone();
-                    let shutdown_tx = shutdown_tx.clone();
-
-                    // Acquire semaphore permit to limit concurrent requests
-                    let Ok(permit) = shared.request_semaphore.clone().acquire_owned().await else {
-                        warn!("Failed to acquire request permit, semaphore closed");
-                        continue;
-                    };
-
-                    // Increment active connection count
-                    active_conns.fetch_add(1, Ordering::SeqCst);
-
-                    tokio::spawn(async move {
-                        // Permit is dropped when this task completes
-                        let _permit = permit;
-                        let _shutdown_guard = shutdown_tx;
-
-                        let service = service_fn(move |req| {
-                            let shared = shared.clone();
-                            async move { handle_request(shared, req, remote_addr).await }
-                        });
-
-                        // Auto-detect HTTP/1.1 or HTTP/2 for better performance
-                        let builder = HttpConnectionBuilder::new(TokioExecutor::new());
-                        if let Err(e) = builder.serve_connection(io, service).await {
-                            error!("Connection error: {}", e);
-                        }
-
-                        // Decrement active connection count
-                        active_conns.fetch_sub(1, Ordering::SeqCst);
-                    });
-                }
-
-                // Check for shutdown signal
-                _ = &mut shutdown_handle => {
-                    // Shutdown signal received
-                    break;
-                }
-            }
-        }
-
-        // Shutdown sequence initiated
-        info!("Initiating graceful shutdown...");
-
-        // Stop accepting new connections (already done by breaking out of loop)
-        drop(listener);
-
-        // Drop our copy of shutdown_tx so shutdown_rx can complete when all tasks finish
-        drop(shutdown_tx);
-
-        // Wait for in-flight requests to complete (with timeout)
-        let drain_timeout = Duration::from_secs(self.shared.config.shutdown_timeout_secs);
-        let active_count = active_connections.load(Ordering::SeqCst);
-
-        if active_count > 0 {
-            info!(
-                "Waiting for {} active connections to complete (timeout: {:?})",
-                active_count, drain_timeout
-            );
-
-            if tokio::time::timeout(drain_timeout, async {
-                // Wait until all active connections finish
-                while active_connections.load(Ordering::SeqCst) > 0 {
-                    tokio::time::sleep(Duration::from_millis(SHUTDOWN_POLL_INTERVAL_MS)).await;
-                }
-                // Also wait for shutdown_rx to close (all tasks dropped their senders)
-                shutdown_rx.recv().await;
-            })
-            .await
-            .is_ok()
-            {
-                info!("All connections completed gracefully");
-            } else {
-                let remaining = active_connections.load(Ordering::SeqCst);
-                warn!("Shutdown timeout - {} connections still active", remaining);
-            }
-        } else {
-            info!("No active connections to drain");
-        }
-
-        info!("Shutdown complete");
-        Ok(())
+    /// Check if shutdown has been requested.
+    #[must_use]
+    pub fn is_shutting_down(&self) -> bool {
+        self.shared.shutdown.load(Ordering::SeqCst)
     }
 }
 
-impl Drop for Host {
+impl Drop for Runtime {
     fn drop(&mut self) {
         // Signal the epoch incrementer thread to stop
         self.epoch_shutdown.store(true, Ordering::Relaxed);

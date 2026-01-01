@@ -2711,6 +2711,7 @@ dependencies = [
  "chrono",
  "clap",
  "criterion",
+ "dashmap",
  "dirs",
  "flate2",
  "futures",

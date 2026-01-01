@@ -180,6 +180,7 @@ tower = { version = "0.5", features = [
 ] }
 hyper-timeout = "0.5"
 async-trait = "0.1"
+dashmap = "6.1.0"
 
 # Unix-only dependencies
 [target.'cfg(unix)'.dependencies]

@@ -1,24 +1,79 @@
-//! Load balancing selection algorithm.
+//! Load balancing selection algorithms.
 //!
-//! Implements round-robin selection for distributing requests across
+//! This module provides different algorithms for distributing requests across
 //! healthy backends.
 //!
 //! # Key Types
 //!
 //! - [`Selection`] - Trait defining the selection algorithm interface
+//! - [`LoadBalanceStrategy`] - Enum of available strategies
 //! - [`RoundRobin`] - Distributes requests evenly in circular fashion
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Trait for load balancing selection algorithms.
-pub(super) trait Selection: Send + Sync {
+///
+/// Implementors must be thread-safe (`Send + Sync`) to allow concurrent access
+/// from multiple request handlers.
+pub trait Selection: Send + Sync {
     /// Select the next backend index from the available backends.
+    ///
+    /// # Arguments
+    ///
+    /// * `healthy_indices` - Indices of backends that are currently healthy and available
+    ///
+    /// # Returns
+    ///
+    /// The selected backend index, or `None` if no backends are available.
     fn select(&self, healthy_indices: &[usize]) -> Option<usize>;
+}
+
+/// Available load balancing strategies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoadBalanceStrategy {
+    /// Round-robin selection - distributes requests evenly in order.
+    #[default]
+    RoundRobin,
+    /// Least connections - selects backend with fewest active connections.
+    /// (Not yet implemented - falls back to RoundRobin)
+    LeastConnections,
+    /// Random selection - randomly selects from healthy backends.
+    /// (Not yet implemented - falls back to RoundRobin)
+    Random,
+    /// Weighted round-robin - uses backend weights for distribution.
+    /// (Not yet implemented - falls back to RoundRobin)
+    Weighted,
+}
+
+impl LoadBalanceStrategy {
+    /// Convert this strategy into a boxed selector.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_backends` - The total number of backends
+    pub fn into_selector(self, num_backends: usize) -> Box<dyn Selection> {
+        match self {
+            Self::RoundRobin | Self::LeastConnections | Self::Random | Self::Weighted => {
+                // For now, all strategies use RoundRobin
+                // TODO: Implement other strategies
+                Box::new(RoundRobin::new(num_backends))
+            },
+        }
+    }
 }
 
 /// Round-robin load balancing algorithm.
 ///
 /// Distributes requests evenly across all healthy backends in a circular fashion.
+/// This is the simplest and most predictable algorithm, suitable for most use cases.
+///
+/// # Example
+///
+/// With 3 backends and requests arriving:
+/// - Request 1 -> Backend 0
+/// - Request 2 -> Backend 1
+/// - Request 3 -> Backend 2
+/// - Request 4 -> Backend 0 (wraps around)
 #[derive(Debug)]
 pub struct RoundRobin {
     /// Current position in the rotation.
@@ -112,6 +167,39 @@ mod tests {
         // Should always return 0
         for _ in 0..5 {
             assert_eq!(rr.select(&healthy), Some(0));
+        }
+    }
+
+    #[test]
+    fn test_load_balance_strategy_default() {
+        assert_eq!(
+            LoadBalanceStrategy::default(),
+            LoadBalanceStrategy::RoundRobin
+        );
+    }
+
+    #[test]
+    fn test_load_balance_strategy_into_selector() {
+        let selector = LoadBalanceStrategy::RoundRobin.into_selector(3);
+        let healthy = vec![0, 1, 2];
+        assert!(selector.select(&healthy).is_some());
+    }
+
+    #[test]
+    fn test_all_strategies_fallback_to_round_robin() {
+        // All strategies should work (even if they just use RoundRobin internally)
+        for strategy in [
+            LoadBalanceStrategy::RoundRobin,
+            LoadBalanceStrategy::LeastConnections,
+            LoadBalanceStrategy::Random,
+            LoadBalanceStrategy::Weighted,
+        ] {
+            let selector = strategy.into_selector(3);
+            let healthy = vec![0, 1, 2];
+            assert!(
+                selector.select(&healthy).is_some(),
+                "Strategy {strategy:?} failed"
+            );
         }
     }
 }

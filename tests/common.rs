@@ -23,7 +23,7 @@
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response};
-use rquickjs::{Context as JsContext, Function, Object, Runtime, Value as JsValue};
+use rquickjs::{Context as JsContext, Function, Object, Runtime as JsRuntime, Value as JsValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -37,7 +37,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 // Import the real runtime
-use mik::runtime::HostBuilder;
+use mik::runtime::{Runtime, Server};
 
 /// A test host that runs the mikrozen runtime on an ephemeral port.
 ///
@@ -621,7 +621,7 @@ fn execute_test_script(
     script: &str,
     input: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let runtime = Runtime::new().map_err(|e| format!("Failed to create JS runtime: {e}"))?;
+    let runtime = JsRuntime::new().map_err(|e| format!("Failed to create JS runtime: {e}"))?;
 
     // Set memory and execution limits for safety
     runtime.set_memory_limit(16 * 1024 * 1024); // 16MB max
@@ -962,11 +962,11 @@ impl RealTestHostBuilder {
             );
         }
 
-        // Build the real runtime using HostBuilder
-        let mut builder = HostBuilder::new()
+        // Build the real runtime using RuntimeBuilder
+        let mut builder = Runtime::builder()
             .modules_dir(&self.modules_dir)
             .cache_size(self.cache_size)
-            .execution_timeout(self.execution_timeout_secs)
+            .execution_timeout_secs(self.execution_timeout_secs)
             .memory_limit(self.memory_limit_mb * 1024 * 1024)
             .max_concurrent_requests(self.max_concurrent_requests)
             .max_body_size(self.max_body_size_mb * 1024 * 1024);
@@ -978,11 +978,12 @@ impl RealTestHostBuilder {
         // Note: scripts_dir is set via manifest, not builder method
         // For now, scripts won't work with RealTestHost
 
-        let host = builder.build()?;
+        let runtime = builder.build()?;
+        let server = Server::new(runtime, addr);
 
         // Spawn the server task
         let server_handle = tokio::spawn(async move {
-            if let Err(e) = host.serve(addr).await {
+            if let Err(e) = server.serve().await {
                 eprintln!("Real test server error: {e}");
             }
         });

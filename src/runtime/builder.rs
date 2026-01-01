@@ -1,9 +1,54 @@
-//! Host builder and configuration loading.
+//! Runtime builder and configuration loading.
 //!
-//! This module provides the [`HostBuilder`] for creating configured [`Host`] instances.
-//! Configuration can be loaded from mik.toml manifest files or set programmatically.
+//! This module provides [`RuntimeBuilder`] for creating configured runtime instances.
+//!
+//! # Examples
+//!
+//! ## From Manifest File
+//!
+//! ```no_run
+//! use mik::runtime::Runtime;
+//!
+//! # fn example() -> anyhow::Result<()> {
+//! let runtime = Runtime::builder()
+//!     .from_manifest_file("mik.toml")?
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Programmatic Configuration
+//!
+//! ```no_run
+//! use mik::runtime::Runtime;
+//!
+//! # fn example() -> anyhow::Result<()> {
+//! let runtime = Runtime::builder()
+//!     .modules_dir("modules/")
+//!     .cache_size(100)
+//!     .execution_timeout(std::time::Duration::from_secs(30))
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## From Manifest Struct
+//!
+//! ```no_run
+//! use mik::runtime::Runtime;
+//! use mik::manifest::Manifest;
+//!
+//! # fn example() -> anyhow::Result<()> {
+//! let manifest = Manifest::default();
+//! let runtime = Runtime::builder()
+//!     .from_manifest(manifest)
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::constants;
+use crate::manifest::{Manifest, ServerConfig};
 use crate::runtime::host_config::HostConfig;
 use crate::runtime::{
     DEFAULT_CACHE_SIZE, DEFAULT_EXECUTION_TIMEOUT_SECS, DEFAULT_MAX_CACHE_MB,
@@ -13,9 +58,10 @@ use crate::runtime::{
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::info;
 
-use super::Host;
+use super::{Host, Runtime};
 
 /// Default max request body size in MB.
 const DEFAULT_MAX_BODY_SIZE_MB: usize = constants::MAX_BODY_SIZE_BYTES / (1024 * 1024);
@@ -24,12 +70,14 @@ const DEFAULT_MAX_BODY_SIZE_MB: usize = constants::MAX_BODY_SIZE_BYTES / (1024 *
 #[derive(Debug, Deserialize)]
 struct PartialManifest {
     #[serde(default)]
-    server: ManifestServerConfig,
+    server: TomlServerConfig,
 }
 
 /// Server configuration from mik.toml [server] section.
+/// Note: This is separate from `crate::manifest::ServerConfig` as it includes
+/// additional parsing helpers like serde defaults.
 #[derive(Debug, Default, Deserialize)]
-struct ManifestServerConfig {
+struct TomlServerConfig {
     #[serde(default = "default_auto")]
     auto: bool,
     #[serde(default = "default_port")]
@@ -162,90 +210,146 @@ impl SystemConfig {
     }
 }
 
-/// Builder for creating a [`Host`].
+/// Builder for creating a [`Runtime`] instance.
 ///
-/// Provides a fluent API for configuring the WASI HTTP runtime.
+/// This is the recommended way to create a `Runtime`. The `RuntimeBuilder` creates
+/// a `Runtime` that doesn't bind to a network address, making it suitable for
+/// both CLI use (via [`Server`](super::Server)) and embedding in applications.
 ///
 /// # Examples
 ///
-/// Basic usage with programmatic configuration:
+/// ## From Manifest File
 ///
 /// ```no_run
-/// use mik::runtime::HostBuilder;
-/// use std::net::SocketAddr;
+/// use mik::runtime::Runtime;
 ///
-/// # async fn example() -> anyhow::Result<()> {
-/// let host = HostBuilder::new()
-///     .modules_dir("modules/")
-///     .port(3000)
-///     .cache_size(100)
-///     .execution_timeout(30)
+/// # fn example() -> anyhow::Result<()> {
+/// let runtime = Runtime::builder()
+///     .from_manifest_file("mik.toml")?
 ///     .build()?;
-///
-/// let addr: SocketAddr = "127.0.0.1:3000".parse()?;
-/// host.serve(addr).await?;
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// Loading from a manifest file:
+/// ## From Manifest Struct
 ///
 /// ```no_run
-/// use mik::runtime::HostBuilder;
+/// use mik::runtime::Runtime;
+/// use mik::manifest::Manifest;
 ///
 /// # fn example() -> anyhow::Result<()> {
-/// let host = HostBuilder::from_manifest("mik.toml")?
-///     .port(8080)  // Override port from manifest
+/// let manifest = Manifest::default();
+/// let runtime = Runtime::builder()
+///     .from_manifest(manifest)
+///     .build()?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// ## Programmatic Configuration
+///
+/// ```no_run
+/// use mik::runtime::Runtime;
+/// use std::time::Duration;
+///
+/// # fn example() -> anyhow::Result<()> {
+/// let runtime = Runtime::builder()
+///     .modules_dir("modules/")
+///     .cache_size(100)
+///     .execution_timeout(Duration::from_secs(30))
+///     .max_concurrent_requests(500)
 ///     .build()?;
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Default)]
 #[must_use]
-pub struct HostBuilder {
+pub struct RuntimeBuilder {
     config: HostConfig,
 }
 
-#[allow(dead_code)]
-impl HostBuilder {
+impl RuntimeBuilder {
     /// Create a new builder with default configuration.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create a builder from a mik.toml manifest file.
+    /// Load configuration from a manifest file.
     ///
-    /// Reads the `[server]` section from the manifest:
-    /// ```toml
-    /// [server]
-    /// port = 3000
-    /// modules = "modules/"
-    /// static = "collected-static/"
-    /// cache_size = 10
+    /// This reads the `[server]` section from a mik.toml file and applies
+    /// the configuration to this builder. Subsequent builder methods can
+    /// override specific settings.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mik::runtime::Runtime;
+    ///
+    /// # fn example() -> anyhow::Result<()> {
+    /// let runtime = Runtime::builder()
+    ///     .from_manifest_file("mik.toml")?
+    ///     .port(8080)  // Override the port
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The manifest file cannot be read (IO error)
+    /// - The manifest file cannot be read
     /// - The manifest contains invalid TOML syntax
-    /// - Required fields are missing or have invalid types
-    pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn from_manifest_file(self, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
         let manifest: PartialManifest = toml::from_str(&content)
             .with_context(|| format!("Failed to parse {}", path.display()))?;
 
-        let server = manifest.server;
+        Ok(self.apply_manifest_server_config(&manifest.server))
+    }
 
+    /// Load configuration from a `Manifest` struct.
+    ///
+    /// This allows programmatic construction of the manifest without
+    /// reading from a file, useful for embedded applications.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mik::runtime::Runtime;
+    /// use mik::manifest::{Manifest, ServerConfig};
+    ///
+    /// # fn example() -> anyhow::Result<()> {
+    /// let manifest = Manifest {
+    ///     server: ServerConfig {
+    ///         port: 8080,
+    ///         modules: "my-modules/".to_string(),
+    ///         ..Default::default()
+    ///     },
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let runtime = Runtime::builder()
+    ///     .from_manifest(manifest)
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_manifest(self, manifest: &Manifest) -> Self {
+        self.from_server_config(&manifest.server)
+    }
+
+    /// Load configuration from a `ServerConfig` struct.
+    ///
+    /// This is useful when you only have the server section of the manifest.
+    pub fn from_server_config(mut self, server: &ServerConfig) -> Self {
         // Apply auto-detection for values that are 0 (meaning "auto")
         let (cache_size, max_cache_bytes, max_concurrent_requests, max_per_module_requests) =
             if server.auto {
                 let sys = SystemConfig::detect();
                 sys.log();
 
-                // Use explicit values if set (non-zero), otherwise use auto-detected
                 let cache_size = if server.cache_size > 0 {
                     server.cache_size
                 } else {
@@ -269,7 +373,6 @@ impl HostBuilder {
 
                 (cache_size, max_cache_bytes, max_concurrent, max_per_module)
             } else {
-                // Auto disabled: use explicit values or static defaults
                 let cache_size = if server.cache_size > 0 {
                     server.cache_size
                 } else {
@@ -294,11 +397,89 @@ impl HostBuilder {
                 (cache_size, max_cache_bytes, max_concurrent, max_per_module)
             };
 
-        let config = HostConfig {
+        self.config = HostConfig {
             modules_path: PathBuf::from(&server.modules),
             cache_size,
             max_cache_bytes,
-            static_dir: server.r#static.map(PathBuf::from),
+            static_dir: server.r#static.clone().map(PathBuf::from),
+            port: server.port,
+            execution_timeout_secs: server.execution_timeout_secs,
+            memory_limit_bytes: DEFAULT_MEMORY_LIMIT_BYTES,
+            max_concurrent_requests,
+            max_body_size_bytes: server.max_body_size_mb * 1024 * 1024,
+            max_per_module_requests,
+            shutdown_timeout_secs: server.shutdown_timeout_secs,
+            logging_enabled: server.logging,
+            http_allowed: server.http_allowed.clone(),
+            scripts_dir: server.scripts.clone().map(PathBuf::from),
+            hot_reload: false,
+            aot_cache_max_mb: 0,
+            fuel_budget: None,
+        };
+
+        self
+    }
+
+    /// Apply configuration from a `TomlServerConfig` (internal helper).
+    fn apply_manifest_server_config(mut self, server: &TomlServerConfig) -> Self {
+        // Apply auto-detection for values that are 0 (meaning "auto")
+        let (cache_size, max_cache_bytes, max_concurrent_requests, max_per_module_requests) =
+            if server.auto {
+                let sys = SystemConfig::detect();
+                sys.log();
+
+                let cache_size = if server.cache_size > 0 {
+                    server.cache_size
+                } else {
+                    sys.cache_size
+                };
+                let max_cache_bytes = if server.max_cache_mb > 0 {
+                    server.max_cache_mb * 1024 * 1024
+                } else {
+                    sys.max_cache_bytes
+                };
+                let max_concurrent = if server.max_concurrent_requests > 0 {
+                    server.max_concurrent_requests
+                } else {
+                    sys.max_concurrent_requests
+                };
+                let max_per_module = if server.max_per_module_requests > 0 {
+                    server.max_per_module_requests
+                } else {
+                    sys.max_per_module_requests
+                };
+
+                (cache_size, max_cache_bytes, max_concurrent, max_per_module)
+            } else {
+                let cache_size = if server.cache_size > 0 {
+                    server.cache_size
+                } else {
+                    DEFAULT_CACHE_SIZE
+                };
+                let max_cache_bytes = if server.max_cache_mb > 0 {
+                    server.max_cache_mb * 1024 * 1024
+                } else {
+                    DEFAULT_MAX_CACHE_MB * 1024 * 1024
+                };
+                let max_concurrent = if server.max_concurrent_requests > 0 {
+                    server.max_concurrent_requests
+                } else {
+                    DEFAULT_MAX_CONCURRENT_REQUESTS
+                };
+                let max_per_module = if server.max_per_module_requests > 0 {
+                    server.max_per_module_requests
+                } else {
+                    DEFAULT_MAX_PER_MODULE_REQUESTS
+                };
+
+                (cache_size, max_cache_bytes, max_concurrent, max_per_module)
+            };
+
+        self.config = HostConfig {
+            modules_path: PathBuf::from(&server.modules),
+            cache_size,
+            max_cache_bytes,
+            static_dir: server.r#static.clone().map(PathBuf::from),
             port: server.port,
             execution_timeout_secs: server.execution_timeout_secs,
             memory_limit_bytes: server.memory_limit_bytes,
@@ -307,24 +488,26 @@ impl HostBuilder {
             max_per_module_requests,
             shutdown_timeout_secs: server.shutdown_timeout_secs,
             logging_enabled: server.logging,
-            http_allowed: server.http_allowed,
+            http_allowed: server.http_allowed.clone(),
             scripts_dir: server.scripts.clone().map(PathBuf::from),
-            hot_reload: false,   // Can be overridden via builder
-            aot_cache_max_mb: 0, // Use default (1GB)
-            fuel_budget: None,   // None = use DEFAULT_FUEL_BUDGET
+            hot_reload: false,
+            aot_cache_max_mb: 0,
+            fuel_budget: None,
         };
 
-        // Debug: log scripts configuration
-        if let Some(ref scripts) = server.scripts {
-            tracing::debug!("Scripts directory configured: {}", scripts);
-        }
-
-        Ok(Self { config })
+        self
     }
 
     /// Try to load from mik.toml if it exists, otherwise use defaults.
-    pub fn from_manifest_or_default() -> Self {
-        Self::from_manifest("mik.toml").unwrap_or_default()
+    pub fn from_manifest_file_or_default(self) -> Self {
+        let path = std::path::Path::new("mik.toml");
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(path)
+            && let Ok(manifest) = toml::from_str::<PartialManifest>(&content)
+        {
+            return self.apply_manifest_server_config(&manifest.server);
+        }
+        self
     }
 
     /// Set the modules directory or single component path.
@@ -333,9 +516,15 @@ impl HostBuilder {
         self
     }
 
-    /// Set the LRU cache size.
+    /// Set the LRU cache size (number of modules).
     pub const fn cache_size(mut self, size: usize) -> Self {
         self.config.cache_size = size;
+        self
+    }
+
+    /// Set the maximum cache memory in bytes.
+    pub const fn max_cache_bytes(mut self, bytes: usize) -> Self {
+        self.config.max_cache_bytes = bytes;
         self
     }
 
@@ -345,14 +534,26 @@ impl HostBuilder {
         self
     }
 
-    /// Set the port (used when not overridden by CLI).
+    /// Set the scripts directory for JS orchestration.
+    pub fn scripts_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.scripts_dir = Some(path.into());
+        self
+    }
+
+    /// Set the port (for reference, not used by Runtime directly).
     pub const fn port(mut self, port: u16) -> Self {
         self.config.port = port;
         self
     }
 
+    /// Set the execution timeout.
+    pub fn execution_timeout(mut self, timeout: Duration) -> Self {
+        self.config.execution_timeout_secs = timeout.as_secs();
+        self
+    }
+
     /// Set the execution timeout in seconds.
-    pub const fn execution_timeout(mut self, timeout_secs: u64) -> Self {
+    pub const fn execution_timeout_secs(mut self, timeout_secs: u64) -> Self {
         self.config.execution_timeout_secs = timeout_secs;
         self
     }
@@ -381,6 +582,12 @@ impl HostBuilder {
         self
     }
 
+    /// Set the graceful shutdown timeout.
+    pub fn shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.config.shutdown_timeout_secs = timeout.as_secs();
+        self
+    }
+
     /// Enable wasi:logging for WASM modules.
     pub const fn logging(mut self, enabled: bool) -> Self {
         self.config.logging_enabled = enabled;
@@ -405,12 +612,23 @@ impl HostBuilder {
         self
     }
 
+    /// Set the fuel budget per request for CPU limiting.
+    pub const fn fuel_budget(mut self, budget: u64) -> Self {
+        self.config.fuel_budget = Some(budget);
+        self
+    }
+
     /// Get the configured port.
     pub const fn get_port(&self) -> u16 {
         self.config.port
     }
 
-    /// Build the host with the configured settings.
+    /// Get a reference to the configuration.
+    pub const fn config(&self) -> &HostConfig {
+        &self.config
+    }
+
+    /// Build the runtime with the configured settings.
     ///
     /// # Errors
     ///
@@ -418,7 +636,62 @@ impl HostBuilder {
     /// - The Wasmtime engine fails to initialize
     /// - The modules directory does not exist
     /// - A single-component path is specified but the file cannot be loaded
-    pub fn build(self) -> Result<Host> {
-        Host::new(self.config)
+    pub fn build(self) -> Result<Runtime> {
+        let host = Host::new(self.config)?;
+        Ok(Runtime::from_host(host))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_runtime_builder_default() {
+        let builder = RuntimeBuilder::new();
+        assert_eq!(builder.config.port, constants::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn test_runtime_builder_modules_dir() {
+        let builder = RuntimeBuilder::new().modules_dir("custom/modules");
+        assert_eq!(builder.config.modules_path, PathBuf::from("custom/modules"));
+    }
+
+    #[test]
+    fn test_runtime_builder_cache_size() {
+        let builder = RuntimeBuilder::new().cache_size(200);
+        assert_eq!(builder.config.cache_size, 200);
+    }
+
+    #[test]
+    fn test_runtime_builder_execution_timeout() {
+        let builder = RuntimeBuilder::new().execution_timeout(Duration::from_secs(60));
+        assert_eq!(builder.config.execution_timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_runtime_builder_from_manifest() {
+        let manifest = Manifest::default();
+        let builder = RuntimeBuilder::new().from_manifest(manifest);
+        assert_eq!(builder.config.port, constants::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn test_runtime_builder_chaining() {
+        let builder = RuntimeBuilder::new()
+            .modules_dir("modules/")
+            .cache_size(100)
+            .port(8080)
+            .execution_timeout(Duration::from_secs(30))
+            .max_concurrent_requests(500)
+            .hot_reload(true);
+
+        assert_eq!(builder.config.modules_path, PathBuf::from("modules/"));
+        assert_eq!(builder.config.cache_size, 100);
+        assert_eq!(builder.config.port, 8080);
+        assert_eq!(builder.config.execution_timeout_secs, 30);
+        assert_eq!(builder.config.max_concurrent_requests, 500);
+        assert!(builder.config.hot_reload);
     }
 }

@@ -39,14 +39,13 @@ use parking_lot::RwLock;
 use crate::constants;
 
 /// Default number of failures before opening the circuit.
-pub(crate) const DEFAULT_FAILURE_THRESHOLD: u32 = constants::CIRCUIT_BREAKER_FAILURE_THRESHOLD;
+pub const DEFAULT_FAILURE_THRESHOLD: u32 = constants::CIRCUIT_BREAKER_FAILURE_THRESHOLD;
 
 /// Default number of successes in half-open state to close the circuit.
-pub(crate) const DEFAULT_SUCCESS_THRESHOLD: u32 = constants::CIRCUIT_BREAKER_SUCCESS_THRESHOLD;
+pub const DEFAULT_SUCCESS_THRESHOLD: u32 = constants::CIRCUIT_BREAKER_SUCCESS_THRESHOLD;
 
 /// Default timeout before transitioning from open to half-open.
-pub(crate) const DEFAULT_TIMEOUT: Duration =
-    Duration::from_secs(constants::CIRCUIT_BREAKER_TIMEOUT_SECS);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(constants::CIRCUIT_BREAKER_TIMEOUT_SECS);
 
 /// Configuration for the circuit breaker.
 #[derive(Debug, Clone)]

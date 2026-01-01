@@ -1,206 +1,171 @@
-//! HTTP proxy service for forwarding requests to backends.
+//! Core proxy logic for request forwarding without network binding.
 //!
-//! Implements the L7 reverse proxy that forwards incoming HTTP requests to healthy
-//! backend servers. Handles request/response transformation, hop-by-hop header
-//! filtering, and error handling.
+//! This module provides the [`Proxy`] struct which handles the core load balancing
+//! logic without any network binding. It can be used:
 //!
-//! # Key Types
+//! - Wrapped by [`LoadBalancer`](super::server::LoadBalancer) for CLI/network use
+//! - Directly in embedded applications (Tauri, Electron, custom servers)
 //!
-//! - [`ProxyService`] - Main proxy service that handles request forwarding
+//! # Architecture
 //!
-//! The proxy supports both HTTP/1.1 and HTTP/2, and integrates with the load
-//! balancer's selection algorithm and backend health tracking.
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                        Proxy (this module)                      │
+//! │  - Pure request forwarding logic                                │
+//! │  - Backend selection (round-robin, weighted, etc.)              │
+//! │  - Health checking coordination                                 │
+//! │  - NO network binding                                           │
+//! ├─────────────────────────────────────────────────────────────────┤
+//! │                  LoadBalancer (server module)                   │
+//! │  - Wraps Proxy                                                  │
+//! │  - Binds to network address                                     │
+//! │  - Handles TCP/HTTP connections                                 │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Example
+//!
+//! ```ignore
+//! use mik::runtime::lb::{Proxy, ProxyBuilder, Backend, BackendHealth};
+//!
+//! // Option A: For CLI/network use
+//! let lb = LoadBalancer::builder()
+//!     .listen("0.0.0.0:8080".parse()?)
+//!     .backend("127.0.0.1:3001")
+//!     .backend("127.0.0.1:3002")
+//!     .build()?;
+//! lb.serve().await?;
+//!
+//! // Option B: For embedding use (no network binding)
+//! let proxy = Proxy::builder()
+//!     .backend(Backend::http("127.0.0.1:3001")?)
+//!     .backend(Backend::runtime(my_runtime))
+//!     .strategy(LoadBalanceStrategy::RoundRobin)
+//!     .build()?;
+//!
+//! // Forward requests programmatically
+//! let response = proxy.forward(request).await?;
+//! ```
 
-use std::convert::Infallible;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::server::conn::{http1, http2};
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::TokioExecutor;
-use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
+use anyhow::{Context, Result};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
+use super::backend::{Backend, BackendHealth, HttpBackend};
+use super::health::{HealthCheckConfig, HealthChecker};
 use super::metrics::LbMetrics;
-use super::selection::Selection;
-use super::{Backend, RoundRobin};
+use super::selection::{LoadBalanceStrategy, Selection};
 
-/// Result of backend selection.
-enum SelectBackendResult {
-    /// A backend was successfully selected.
-    Selected(Backend),
-    /// No healthy backends are available.
-    NoHealthyBackends,
-    /// All healthy backends are at connection capacity.
-    AllAtCapacity,
-}
+// Import Request/Response types from runtime
+pub use crate::runtime::request::{Request, Response};
 
-/// HTTP proxy service that forwards requests to backend servers.
-pub struct ProxyService {
+/// Core proxy for request forwarding.
+///
+/// The `Proxy` handles the core load balancing logic:
+/// - Maintains a list of backends (HTTP or embedded Runtime)
+/// - Selects backends using configurable strategies
+/// - Coordinates health checking
+/// - Forwards requests to selected backends
+///
+/// It does NOT bind to any network address - use [`LoadBalancer`](super::server::LoadBalancer)
+/// for network serving, or call [`forward`](Self::forward) directly for embedded use.
+pub struct Proxy {
+    /// List of backends to load balance across.
     backends: Arc<RwLock<Vec<Backend>>>,
-    selection: Arc<RwLock<RoundRobin>>,
-    client: reqwest::Client,
-    timeout: Duration,
-    /// Whether to use HTTP/2 for incoming connections.
-    http2_only: bool,
-    /// Metrics collector for load balancer observability.
+    /// Health checker for backend monitoring.
+    health_checker: Option<Arc<HealthChecker>>,
+    /// Load balancing strategy.
+    strategy: Arc<RwLock<Box<dyn Selection>>>,
+    /// Request timeout for forwarding.
+    request_timeout: Duration,
+    /// HTTP client for HTTP backends (shared across all backends).
+    http_client: reqwest::Client,
+    /// Metrics collector.
     metrics: LbMetrics,
 }
 
-impl ProxyService {
-    /// Create a new proxy service.
-    #[allow(dead_code)]
-    pub fn new(
-        backends: Arc<RwLock<Vec<Backend>>>,
-        selection: Arc<RwLock<RoundRobin>>,
-        client: reqwest::Client,
-        timeout: Duration,
-    ) -> Self {
-        Self {
-            backends,
-            selection,
-            client,
-            timeout,
-            http2_only: false,
-            metrics: LbMetrics::new(),
-        }
+impl std::fmt::Debug for Proxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Proxy")
+            .field("request_timeout", &self.request_timeout)
+            .field("has_health_checker", &self.health_checker.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Proxy {
+    /// Create a new `ProxyBuilder`.
+    pub fn builder() -> ProxyBuilder {
+        ProxyBuilder::new()
     }
 
-    /// Create a new proxy service with HTTP/2 support.
-    pub fn with_http2(
-        backends: Arc<RwLock<Vec<Backend>>>,
-        selection: Arc<RwLock<RoundRobin>>,
-        client: reqwest::Client,
-        timeout: Duration,
-        http2_only: bool,
-    ) -> Self {
-        Self {
-            backends,
-            selection,
-            client,
-            timeout,
-            http2_only,
-            metrics: LbMetrics::new(),
-        }
-    }
+    /// Forward a request to a selected backend.
+    ///
+    /// This method:
+    /// 1. Selects an available backend using the configured strategy
+    /// 2. Forwards the request to the selected backend
+    /// 3. Records metrics and updates backend health
+    /// 4. Returns the response or an error
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No healthy backends are available
+    /// - All backends are at connection capacity
+    /// - The backend request fails
+    pub async fn forward(&self, req: Request) -> Result<Response> {
+        let start = Instant::now();
 
-    /// Start serving on the given address.
-    pub async fn serve(self, addr: SocketAddr) -> Result<()> {
-        let listener = TcpListener::bind(addr).await?;
-        let protocol = if self.http2_only { "h2" } else { "http/1.1" };
-        info!("Proxy service listening on http://{} ({})", addr, protocol);
-
-        let proxy = Arc::new(self);
-
-        loop {
-            let (stream, remote_addr) = listener.accept().await?;
-            let io = TokioIo::new(stream);
-            let proxy = proxy.clone();
-            let http2_only = proxy.http2_only;
-
-            tokio::spawn(async move {
-                let service = service_fn(move |req| {
-                    let proxy = proxy.clone();
-                    async move { proxy.handle_request(req, remote_addr).await }
-                });
-
-                let result = if http2_only {
-                    // Use HTTP/2 with prior knowledge (no TLS/ALPN negotiation)
-                    http2::Builder::new(TokioExecutor::new())
-                        .serve_connection(io, service)
-                        .await
-                } else {
-                    // Use HTTP/1.1
-                    http1::Builder::new().serve_connection(io, service).await
-                };
-
-                if let Err(e) = result
-                    && !e.to_string().contains("connection closed")
-                {
-                    error!("Connection error: {}", e);
-                }
-            });
-        }
-    }
-
-    /// Handle a single request by proxying it to a backend.
-    async fn handle_request(
-        &self,
-        req: Request<Incoming>,
-        remote_addr: SocketAddr,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
-        let method = req.method().clone();
-        let uri = req.uri().clone();
-        let path = uri.path();
-
-        debug!(
-            method = %method,
-            path = %path,
-            remote = %remote_addr,
-            "Received request"
-        );
-
-        // Select a healthy backend with available capacity
+        // Select an available backend
         let backend = match self.select_backend().await {
-            SelectBackendResult::Selected(backend) => backend,
-            SelectBackendResult::NoHealthyBackends => {
+            SelectResult::Selected(backend) => backend,
+            SelectResult::NoHealthyBackends => {
                 warn!("No healthy backends available");
-                return Ok(Response::builder()
-                    .status(StatusCode::SERVICE_UNAVAILABLE)
-                    .body(Full::new(Bytes::from("No healthy backends available")))
-                    .expect("valid error response"));
+                return Ok(Response {
+                    status: 503,
+                    headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
+                    body: b"No healthy backends available".to_vec(),
+                });
             },
-            SelectBackendResult::AllAtCapacity => {
+            SelectResult::AllAtCapacity => {
                 warn!("All backends at connection capacity");
-                return Ok(Response::builder()
-                    .status(StatusCode::SERVICE_UNAVAILABLE)
-                    .body(Full::new(Bytes::from(
-                        "All backends at connection capacity",
-                    )))
-                    .expect("valid error response"));
+                return Ok(Response {
+                    status: 503,
+                    headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
+                    body: b"All backends at connection capacity".to_vec(),
+                });
             },
         };
 
-        // Track request timing
-        let start = Instant::now();
-        let backend_addr = backend.address().to_string();
+        let backend_id = backend.id().to_string();
 
-        // Track request
+        // Track request start
         backend.start_request();
-
-        // Update active connections metric
         self.metrics
-            .set_active_connections(&backend_addr, backend.active_requests());
+            .set_active_connections(&backend_id, backend.active_requests());
 
         // Forward the request
-        let result = self.forward_request(req, &backend).await;
+        let result = backend
+            .forward(&req, &self.http_client, self.request_timeout)
+            .await;
 
-        // End request tracking
+        // Track request end
         backend.end_request();
-
-        // Update active connections metric after request ends
         self.metrics
-            .set_active_connections(&backend_addr, backend.active_requests());
+            .set_active_connections(&backend_id, backend.active_requests());
 
-        // Calculate request duration
         let duration = start.elapsed().as_secs_f64();
 
         match result {
             Ok(response) => {
                 backend.record_success();
-                // Record successful request metrics
-                self.metrics.record_success(&backend_addr, duration);
+                self.metrics.record_success(&backend_id, duration);
                 debug!(
-                    backend = %backend.address(),
-                    status = %response.status(),
+                    backend = %backend_id,
+                    status = response.status,
                     duration_ms = %(duration * 1000.0),
                     "Request completed"
                 );
@@ -208,38 +173,52 @@ impl ProxyService {
             },
             Err(e) => {
                 backend.record_failure();
-                // Record failed request metrics
-                self.metrics.record_failure(&backend_addr, duration);
+                self.metrics.record_failure(&backend_id, duration);
                 error!(
-                    backend = %backend.address(),
+                    backend = %backend_id,
                     error = %e,
                     duration_ms = %(duration * 1000.0),
                     "Request failed"
                 );
-                Ok(Response::builder()
-                    .status(StatusCode::BAD_GATEWAY)
-                    .body(Full::new(Bytes::from(format!("Backend error: {e}"))))
-                    .expect("valid error response"))
+                Ok(Response {
+                    status: 502,
+                    headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
+                    body: format!("Backend error: {e}").into_bytes(),
+                })
             },
         }
     }
 
-    /// Select an available backend with capacity using the load balancing algorithm.
-    ///
-    /// A backend is considered available if:
-    /// - It is healthy (health checks are passing)
-    /// - Its circuit breaker allows requests (if configured)
-    /// - It has capacity for more connections
-    ///
-    /// Returns `SelectBackendResult::Selected` if a backend is available,
-    /// `SelectBackendResult::NoHealthyBackends` if no backends are available (unhealthy or circuit open),
-    /// or `SelectBackendResult::AllAtCapacity` if all available backends are at their connection limit.
-    async fn select_backend(&self) -> SelectBackendResult {
+    /// Get the list of backends.
+    pub async fn backends(&self) -> Vec<Backend> {
+        self.backends.read().await.clone()
+    }
+
+    /// Get health status for all backends.
+    pub async fn health_status(&self) -> Vec<BackendHealth> {
         let backends = self.backends.read().await;
-        let selection = self.selection.read().await;
+        backends.iter().map(Backend::health).collect()
+    }
+
+    /// Start background health checking.
+    ///
+    /// Returns a handle that can be used to stop health checking.
+    pub fn start_health_checks(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let health_checker = self.health_checker.clone()?;
+        let backends = self.backends.clone();
+        let metrics = self.metrics.clone();
+
+        Some(tokio::spawn(async move {
+            health_checker.run(backends, metrics).await;
+        }))
+    }
+
+    /// Select an available backend using the load balancing strategy.
+    async fn select_backend(&self) -> SelectResult {
+        let backends = self.backends.read().await;
+        let strategy = self.strategy.read().await;
 
         // Get indices of available backends (healthy + circuit breaker allows)
-        // The is_available() method checks both health status and circuit breaker state
         let available_indices: Vec<usize> = backends
             .iter()
             .enumerate()
@@ -248,10 +227,10 @@ impl ProxyService {
             .collect();
 
         if available_indices.is_empty() {
-            return SelectBackendResult::NoHealthyBackends;
+            return SelectResult::NoHealthyBackends;
         }
 
-        // Get indices of available backends with connection capacity
+        // Get indices with connection capacity
         let capacity_indices: Vec<usize> = available_indices
             .iter()
             .copied()
@@ -259,102 +238,178 @@ impl ProxyService {
             .collect();
 
         if capacity_indices.is_empty() {
-            return SelectBackendResult::AllAtCapacity;
+            return SelectResult::AllAtCapacity;
         }
 
-        // Select using the algorithm from backends with capacity
-        selection
+        // Select using the strategy
+        strategy
             .select(&capacity_indices)
-            .map_or(SelectBackendResult::AllAtCapacity, |idx| {
-                SelectBackendResult::Selected(backends[idx].clone())
+            .map_or(SelectResult::AllAtCapacity, |idx| {
+                SelectResult::Selected(backends[idx].clone())
             })
-    }
-
-    /// Forward a request to the selected backend.
-    async fn forward_request(
-        &self,
-        req: Request<Incoming>,
-        backend: &Backend,
-    ) -> Result<Response<Full<Bytes>>> {
-        let method = req.method().clone();
-        let uri = req.uri().clone();
-        let path = uri
-            .path_and_query()
-            .map_or("/", hyper::http::uri::PathAndQuery::as_str);
-
-        // Build the backend URL
-        let backend_url = backend.url(path);
-
-        // Extract headers before consuming the body
-        let request_headers: Vec<_> = req
-            .headers()
-            .iter()
-            .filter(|(name, _)| !is_hop_by_hop_header(name.as_str()))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-
-        // Collect request body
-        let body_bytes = req.collect().await?.to_bytes();
-
-        // Build the proxied request
-        let mut request_builder = match method {
-            Method::GET => self.client.get(&backend_url),
-            Method::POST => self.client.post(&backend_url),
-            Method::PUT => self.client.put(&backend_url),
-            Method::DELETE => self.client.delete(&backend_url),
-            Method::PATCH => self.client.patch(&backend_url),
-            Method::HEAD => self.client.head(&backend_url),
-            _ => self.client.request(method, &backend_url),
-        };
-
-        // Forward headers (skip hop-by-hop headers)
-        for (name, value) in request_headers {
-            request_builder = request_builder.header(name, value);
-        }
-
-        // Add body if not empty
-        if !body_bytes.is_empty() {
-            request_builder = request_builder.body(body_bytes.to_vec());
-        }
-
-        // Set timeout
-        request_builder = request_builder.timeout(self.timeout);
-
-        // Send the request
-        let response = request_builder.send().await?;
-
-        // Build the response
-        let status = response.status();
-        let headers = response.headers().clone();
-        let body = response.bytes().await?;
-
-        let mut builder = Response::builder().status(status);
-
-        // Copy response headers (skip hop-by-hop headers)
-        for (name, value) in &headers {
-            let name_str = name.as_str().to_lowercase();
-            if !is_hop_by_hop_header(&name_str) {
-                builder = builder.header(name, value);
-            }
-        }
-
-        Ok(builder.body(Full::new(body))?)
     }
 }
 
-/// Check if a header is a hop-by-hop header that should not be forwarded.
-fn is_hop_by_hop_header(name: &str) -> bool {
-    matches!(
-        name,
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailers"
-            | "transfer-encoding"
-            | "upgrade"
-    )
+/// Result of backend selection.
+enum SelectResult {
+    /// A backend was successfully selected.
+    Selected(Backend),
+    /// No healthy backends are available.
+    NoHealthyBackends,
+    /// All healthy backends are at connection capacity.
+    AllAtCapacity,
+}
+
+/// Builder for [`Proxy`].
+///
+/// Use this to configure and create a `Proxy` instance.
+///
+/// # Example
+///
+/// ```ignore
+/// let proxy = Proxy::builder()
+///     .backend(Backend::http("127.0.0.1:3001")?)
+///     .backend(Backend::http("127.0.0.1:3002")?)
+///     .strategy(LoadBalanceStrategy::RoundRobin)
+///     .health_check(HealthCheckConfig::http("/health"))
+///     .request_timeout(Duration::from_secs(30))
+///     .build()?;
+/// ```
+#[derive(Default)]
+pub struct ProxyBuilder {
+    backends: Vec<Backend>,
+    strategy: LoadBalanceStrategy,
+    health_check: Option<HealthCheckConfig>,
+    request_timeout: Duration,
+    max_connections_per_backend: usize,
+    pool_idle_timeout: Duration,
+    tcp_keepalive: Duration,
+    http2_only: bool,
+}
+
+impl ProxyBuilder {
+    /// Create a new `ProxyBuilder` with default settings.
+    pub fn new() -> Self {
+        Self {
+            backends: Vec::new(),
+            strategy: LoadBalanceStrategy::RoundRobin,
+            health_check: Some(HealthCheckConfig::default()),
+            request_timeout: Duration::from_secs(30),
+            max_connections_per_backend: 100,
+            pool_idle_timeout: Duration::from_secs(90),
+            tcp_keepalive: Duration::from_secs(60),
+            http2_only: false,
+        }
+    }
+
+    /// Add a backend to the proxy.
+    pub fn backend(mut self, backend: Backend) -> Self {
+        self.backends.push(backend);
+        self
+    }
+
+    /// Add an HTTP backend by address string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the address cannot be parsed.
+    pub fn http_backend(mut self, address: impl Into<String>) -> Self {
+        self.backends
+            .push(Backend::Http(HttpBackend::new(address.into())));
+        self
+    }
+
+    /// Set the load balancing strategy.
+    pub fn strategy(mut self, strategy: LoadBalanceStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
+    /// Set the health check configuration.
+    ///
+    /// Pass `None` to disable health checking.
+    pub fn health_check(mut self, config: Option<HealthCheckConfig>) -> Self {
+        self.health_check = config;
+        self
+    }
+
+    /// Set the request timeout.
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
+    /// Set the maximum connections per backend for HTTP backends.
+    pub fn max_connections_per_backend(mut self, max: usize) -> Self {
+        self.max_connections_per_backend = max;
+        self
+    }
+
+    /// Set the connection pool idle timeout.
+    pub fn pool_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.pool_idle_timeout = timeout;
+        self
+    }
+
+    /// Set the TCP keepalive interval.
+    pub fn tcp_keepalive(mut self, interval: Duration) -> Self {
+        self.tcp_keepalive = interval;
+        self
+    }
+
+    /// Enable HTTP/2 only mode for backend connections.
+    ///
+    /// When enabled, HTTP/2 with prior knowledge is used for all backend connections.
+    /// Only enable this when all backends support HTTP/2.
+    pub fn http2_only(mut self, enabled: bool) -> Self {
+        self.http2_only = enabled;
+        self
+    }
+
+    /// Build the [`Proxy`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No backends were configured
+    /// - The HTTP client cannot be created
+    pub fn build(self) -> Result<Proxy> {
+        if self.backends.is_empty() {
+            anyhow::bail!("At least one backend must be configured");
+        }
+
+        // Create HTTP client with connection pooling
+        let mut client_builder = reqwest::Client::builder()
+            .timeout(self.request_timeout)
+            .pool_max_idle_per_host(self.max_connections_per_backend)
+            .pool_idle_timeout(self.pool_idle_timeout)
+            .tcp_keepalive(self.tcp_keepalive);
+
+        if self.http2_only {
+            client_builder = client_builder.http2_prior_knowledge();
+        }
+
+        let http_client = client_builder
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        // Create selection strategy
+        let strategy: Box<dyn Selection> = self.strategy.into_selector(self.backends.len());
+
+        // Create health checker if configured
+        let health_checker = self
+            .health_check
+            .map(|config| Arc::new(HealthChecker::new(config)));
+
+        Ok(Proxy {
+            backends: Arc::new(RwLock::new(self.backends)),
+            health_checker,
+            strategy: Arc::new(RwLock::new(strategy)),
+            request_timeout: self.request_timeout,
+            http_client,
+            metrics: LbMetrics::new(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -362,11 +417,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hop_by_hop_headers() {
-        assert!(is_hop_by_hop_header("connection"));
-        assert!(is_hop_by_hop_header("keep-alive"));
-        assert!(is_hop_by_hop_header("transfer-encoding"));
-        assert!(!is_hop_by_hop_header("content-type"));
-        assert!(!is_hop_by_hop_header("x-custom-header"));
+    fn test_proxy_builder_requires_backends() {
+        let result = Proxy::builder().build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("backend"));
+    }
+
+    #[test]
+    fn test_proxy_builder_with_http_backend() {
+        let result = Proxy::builder()
+            .http_backend("127.0.0.1:3001")
+            .http_backend("127.0.0.1:3002")
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_proxy_builder_configuration() {
+        let result = Proxy::builder()
+            .http_backend("127.0.0.1:3001")
+            .strategy(LoadBalanceStrategy::RoundRobin)
+            .request_timeout(Duration::from_secs(60))
+            .max_connections_per_backend(200)
+            .pool_idle_timeout(Duration::from_secs(120))
+            .tcp_keepalive(Duration::from_secs(30))
+            .http2_only(true)
+            .health_check(Some(HealthCheckConfig::http("/healthz")))
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_proxy_builder_no_health_check() {
+        let result = Proxy::builder()
+            .http_backend("127.0.0.1:3001")
+            .health_check(None)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_request_builder() {
+        let req = Request::new("GET", "/api/users")
+            .with_header("Accept", "application/json")
+            .with_body(b"test".to_vec());
+
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.path, "/api/users");
+        assert_eq!(req.headers.len(), 1);
+        assert_eq!(req.body, b"test");
+    }
+
+    #[test]
+    fn test_response_builders() {
+        let ok = Response::ok();
+        assert_eq!(ok.status, 200);
+
+        let not_found = Response::not_found("not found");
+        assert_eq!(not_found.status, 404);
+
+        let error = Response::internal_error("oops");
+        assert_eq!(error.status, 500);
+
+        let bad_gateway = Response::bad_gateway("backend failed");
+        assert_eq!(bad_gateway.status, 502);
+
+        let unavailable = Response::service_unavailable("no backends");
+        assert_eq!(unavailable.status, 503);
     }
 }

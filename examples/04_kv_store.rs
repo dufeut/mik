@@ -27,9 +27,11 @@
 
 use anyhow::Result;
 use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::TempDir;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("=== mik Key-Value Store Example ===\n");
 
     // =========================================================================
@@ -48,13 +50,12 @@ fn main() -> Result<()> {
     println!("Creating KV store at: {}", db_path.display());
 
     // Open the KV store (creates the database if it doesn't exist)
-    let kv = mik::daemon::services::kv::KvStore::open(&db_path)?;
+    let kv = mik::daemon::services::kv::KvStore::file(&db_path)?;
 
     println!("KV store opened successfully!\n");
 
     // Note: In production, you would typically use:
-    // let kv = mik::daemon::services::kv::KvStore::open_default()?;
-    // This opens the store at ~/.mik/kv.redb
+    // let kv = mik::daemon::services::kv::KvStore::file("~/.mik/kv.redb")?;
 
     // =========================================================================
     // Part 2: Basic CRUD Operations
@@ -65,22 +66,22 @@ fn main() -> Result<()> {
 
     println!("--- Part 2: Basic CRUD Operations ---\n");
 
-    // CREATE: Store a value
+    // CREATE: Store a value (None for no TTL)
     println!("CREATE: Setting key 'user:1001'");
     let user_data = r#"{"name": "Alice", "email": "alice@example.com"}"#;
-    kv.set("user:1001", user_data.as_bytes())?;
+    kv.set("user:1001", user_data.as_bytes(), None).await?;
     println!("  Stored: {}", user_data);
 
     // READ: Retrieve a value
     println!("\nREAD: Getting key 'user:1001'");
-    if let Some(value) = kv.get("user:1001")? {
+    if let Some(value) = kv.get("user:1001").await? {
         let data = String::from_utf8_lossy(&value);
         println!("  Retrieved: {}", data);
     }
 
     // READ: Non-existent key returns None
     println!("\nREAD: Getting non-existent key 'user:9999'");
-    match kv.get("user:9999")? {
+    match kv.get("user:9999").await? {
         Some(_) => println!("  Found (unexpected)"),
         None => println!("  Not found (as expected)"),
     }
@@ -88,27 +89,27 @@ fn main() -> Result<()> {
     // UPDATE: Overwrite existing value
     println!("\nUPDATE: Updating key 'user:1001'");
     let updated_data = r#"{"name": "Alice Smith", "email": "alice.smith@example.com"}"#;
-    kv.set("user:1001", updated_data.as_bytes())?;
-    if let Some(value) = kv.get("user:1001")? {
+    kv.set("user:1001", updated_data.as_bytes(), None).await?;
+    if let Some(value) = kv.get("user:1001").await? {
         let data = String::from_utf8_lossy(&value);
         println!("  Updated: {}", data);
     }
 
     // DELETE: Remove a key
     println!("\nDELETE: Removing key 'user:1001'");
-    let deleted = kv.delete("user:1001")?;
+    let deleted = kv.delete("user:1001").await?;
     println!("  Key existed and was deleted: {}", deleted);
 
     // Verify deletion
     println!("  Verifying deletion...");
-    match kv.get("user:1001")? {
+    match kv.get("user:1001").await? {
         Some(_) => println!("  Still exists (unexpected)"),
         None => println!("  Confirmed deleted"),
     }
 
     // DELETE: Deleting non-existent key is safe (idempotent)
     println!("\nDELETE: Deleting already-deleted key");
-    let deleted_again = kv.delete("user:1001")?;
+    let deleted_again = kv.delete("user:1001").await?;
     println!(
         "  Key existed: {} (safe to call multiple times)",
         deleted_again
@@ -127,15 +128,15 @@ fn main() -> Result<()> {
     let binary_data: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     println!("Storing binary data (PNG header signature)");
     println!("  Bytes: {:?}", binary_data);
-    kv.set("image:header", &binary_data)?;
+    kv.set("image:header", &binary_data, None).await?;
 
     // Retrieve binary data
-    if let Some(value) = kv.get("image:header")? {
+    if let Some(value) = kv.get("image:header").await? {
         println!("  Retrieved {} bytes: {:?}", value.len(), value);
     }
 
     // Clean up
-    kv.delete("image:header")?;
+    kv.delete("image:header").await?;
 
     // =========================================================================
     // Part 4: TTL (Time-To-Live) for Automatic Expiration
@@ -148,22 +149,27 @@ fn main() -> Result<()> {
 
     // Set a key with 2-second TTL
     println!("Setting key 'session:abc123' with 2-second TTL");
-    kv.set_with_ttl("session:abc123", b"session_data_here", 2)?;
+    kv.set(
+        "session:abc123",
+        b"session_data_here",
+        Some(Duration::from_secs(2)),
+    )
+    .await?;
 
     // Verify it exists immediately
-    let exists_now = kv.exists("session:abc123")?;
+    let exists_now = kv.exists("session:abc123").await?;
     println!("  Exists immediately: {}", exists_now);
 
     // Wait for expiration
     println!("  Waiting 3 seconds for expiration...");
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Check after expiration
-    let exists_after = kv.exists("session:abc123")?;
+    let exists_after = kv.exists("session:abc123").await?;
     println!("  Exists after TTL: {}", exists_after);
 
     // Accessing an expired key returns None and cleans it up
-    match kv.get("session:abc123")? {
+    match kv.get("session:abc123").await? {
         Some(_) => println!("  Found (unexpected - TTL should have expired)"),
         None => println!("  Not found (TTL expired as expected)"),
     }
@@ -189,37 +195,37 @@ fn main() -> Result<()> {
 
     println!("Creating test data:");
     for (key, value) in &test_keys {
-        kv.set(key, value.as_bytes())?;
+        kv.set(key, value.as_bytes(), None).await?;
         println!("  {} = {}", key, value);
     }
 
     // List all keys
     println!("\nListing all keys:");
-    let all_keys = kv.list_keys(None)?;
+    let all_keys = kv.list_keys(None).await?;
     for key in &all_keys {
         println!("  {}", key);
     }
 
     // List keys with prefix
     println!("\nListing keys with prefix 'users:':");
-    let user_keys = kv.list_keys(Some("users:"))?;
+    let user_keys = kv.list_keys(Some("users:")).await?;
     for key in &user_keys {
         println!("  {}", key);
     }
 
     println!("\nListing keys with prefix 'products:':");
-    let product_keys = kv.list_keys(Some("products:"))?;
+    let product_keys = kv.list_keys(Some("products:")).await?;
     for key in &product_keys {
         println!("  {}", key);
     }
 
     println!("\nListing keys with prefix 'nonexistent:':");
-    let empty_keys = kv.list_keys(Some("nonexistent:"))?;
+    let empty_keys = kv.list_keys(Some("nonexistent:")).await?;
     println!("  Found {} keys (empty as expected)", empty_keys.len());
 
     // Clean up test data
     for (key, _) in &test_keys {
-        kv.delete(key)?;
+        kv.delete(key).await?;
     }
 
     // =========================================================================
@@ -232,15 +238,15 @@ fn main() -> Result<()> {
     println!("\n--- Part 6: Checking Key Existence ---\n");
 
     // Set a key
-    kv.set("test:exists", b"value")?;
+    kv.set("test:exists", b"value", None).await?;
 
     // Check existence
     println!("Checking key existence:");
-    println!("  'test:exists': {}", kv.exists("test:exists")?);
-    println!("  'test:missing': {}", kv.exists("test:missing")?);
+    println!("  'test:exists': {}", kv.exists("test:exists").await?);
+    println!("  'test:missing': {}", kv.exists("test:missing").await?);
 
     // Clean up
-    kv.delete("test:exists")?;
+    kv.delete("test:exists").await?;
 
     // =========================================================================
     // Part 7: Error Handling Patterns
@@ -252,11 +258,14 @@ fn main() -> Result<()> {
     println!("\n--- Part 7: Error Handling Patterns ---\n");
 
     // Demonstrate proper error handling patterns
-    fn process_user_data(kv: &mik::daemon::services::kv::KvStore, user_id: &str) -> Result<String> {
+    async fn process_user_data(
+        kv: &mik::daemon::services::kv::KvStore,
+        user_id: &str,
+    ) -> Result<String> {
         let key = format!("user:{}", user_id);
 
         // The ? operator propagates errors with context
-        match kv.get(&key)? {
+        match kv.get(&key).await? {
             Some(data) => {
                 // Convert bytes to string, handling potential UTF-8 errors
                 let json = String::from_utf8(data)
@@ -271,39 +280,39 @@ fn main() -> Result<()> {
     }
 
     // Set up test data
-    kv.set("user:alice", b"valid user data")?;
-    kv.set("user:broken", &[0xFF, 0xFE])?; // Invalid UTF-8
+    kv.set("user:alice", b"valid user data", None).await?;
+    kv.set("user:broken", &[0xFF, 0xFE], None).await?; // Invalid UTF-8
 
     // Test the function
     println!("Testing error handling patterns:");
 
     // Success case
-    match process_user_data(&kv, "alice") {
+    match process_user_data(&kv, "alice").await {
         Ok(data) => println!("  user:alice -> Ok({})", data),
         Err(e) => println!("  user:alice -> Err({})", e),
     }
 
     // Not found case
-    match process_user_data(&kv, "unknown") {
+    match process_user_data(&kv, "unknown").await {
         Ok(data) => println!("  user:unknown -> Ok({})", data),
         Err(e) => println!("  user:unknown -> Err({})", e),
     }
 
     // Invalid data case
-    match process_user_data(&kv, "broken") {
+    match process_user_data(&kv, "broken").await {
         Ok(data) => println!("  user:broken -> Ok({})", data),
         Err(e) => println!("  user:broken -> Err({})", e),
     }
 
     // Clean up
-    kv.delete("user:alice")?;
-    kv.delete("user:broken")?;
+    kv.delete("user:alice").await?;
+    kv.delete("user:broken").await?;
 
     // =========================================================================
     // Part 8: Thread Safety and Cloning
     // =========================================================================
     //
-    // KvStore is Clone and thread-safe. You can share it across threads
+    // KvStore is Clone and thread-safe. You can share it across tasks
     // using Arc or by cloning (internally uses Arc).
 
     println!("\n--- Part 8: Thread Safety and Cloning ---\n");
@@ -312,8 +321,8 @@ fn main() -> Result<()> {
     let kv_clone = kv.clone();
 
     // Both references access the same underlying database
-    kv.set("shared:key", b"original")?;
-    if let Some(value) = kv_clone.get("shared:key")? {
+    kv.set("shared:key", b"original", None).await?;
+    if let Some(value) = kv_clone.get("shared:key").await? {
         println!(
             "Clone sees original value: {}",
             String::from_utf8_lossy(&value)
@@ -321,8 +330,10 @@ fn main() -> Result<()> {
     }
 
     // Updates from clone are visible to original
-    kv_clone.set("shared:key", b"updated by clone")?;
-    if let Some(value) = kv.get("shared:key")? {
+    kv_clone
+        .set("shared:key", b"updated by clone", None)
+        .await?;
+    if let Some(value) = kv.get("shared:key").await? {
         println!(
             "Original sees clone's update: {}",
             String::from_utf8_lossy(&value)
@@ -330,12 +341,12 @@ fn main() -> Result<()> {
     }
 
     // Clean up
-    kv.delete("shared:key")?;
+    kv.delete("shared:key").await?;
 
     println!("\nIn a multi-threaded context, you would use:");
-    println!("  let kv = Arc::new(KvStore::open(...)?);");
-    println!("  let kv_thread = kv.clone();");
-    println!("  std::thread::spawn(move || {{ kv_thread.set(...) }});");
+    println!("  let kv = Arc::new(KvStore::file(...)?);");
+    println!("  let kv_task = kv.clone();");
+    println!("  tokio::spawn(async move {{ kv_task.set(...).await }});");
 
     // =========================================================================
     // Part 9: Best Practices

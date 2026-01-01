@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Serialized to JSON for compatibility with debugging tools and future
 /// schema evolution. The expiration timestamp is in Unix epoch seconds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct KvEntry {
+pub(crate) struct KvEntry {
     /// The actual value bytes (could be any binary data)
     pub value: Vec<u8>,
     /// Optional expiration timestamp (Unix epoch seconds). None = never expires.
