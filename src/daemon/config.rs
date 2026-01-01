@@ -8,6 +8,8 @@
 //! ```toml
 //! [daemon]
 //! port = 9919
+//! max_auto_restarts = 10
+//! health_check_interval_secs = 10
 //!
 //! [services]
 //! kv_enabled = true
@@ -35,6 +37,10 @@ pub struct DaemonConfig {
 pub struct DaemonSettings {
     /// Port for the daemon HTTP API.
     pub port: u16,
+    /// Maximum number of auto-restarts before giving up.
+    pub max_auto_restarts: u32,
+    /// Health check interval in seconds.
+    pub health_check_interval_secs: u64,
 }
 
 /// Embedded service enable/disable settings.
@@ -51,7 +57,11 @@ pub struct ServiceSettings {
 
 impl Default for DaemonSettings {
     fn default() -> Self {
-        Self { port: 9919 }
+        Self {
+            port: 9919,
+            max_auto_restarts: 10,
+            health_check_interval_secs: 10,
+        }
     }
 }
 
@@ -122,6 +132,8 @@ mod tests {
     fn test_default_config() {
         let config = DaemonConfig::default();
         assert_eq!(config.daemon.port, 9919);
+        assert_eq!(config.daemon.max_auto_restarts, 10);
+        assert_eq!(config.daemon.health_check_interval_secs, 10);
         assert!(config.services.kv_enabled);
         assert!(config.services.sql_enabled);
         assert!(config.services.storage_enabled);
@@ -132,6 +144,8 @@ mod tests {
         let toml = r"
 [daemon]
 port = 9090
+max_auto_restarts = 5
+health_check_interval_secs = 30
 
 [services]
 kv_enabled = true
@@ -140,6 +154,8 @@ storage_enabled = true
 ";
         let config: DaemonConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.daemon.port, 9090);
+        assert_eq!(config.daemon.max_auto_restarts, 5);
+        assert_eq!(config.daemon.health_check_interval_secs, 30);
         assert!(config.services.kv_enabled);
         assert!(!config.services.sql_enabled);
         assert!(config.services.storage_enabled);
@@ -147,13 +163,16 @@ storage_enabled = true
 
     #[test]
     fn test_parse_partial_config() {
-        // Only daemon section
+        // Only daemon section with port
         let toml = r"
 [daemon]
 port = 8080
 ";
         let config: DaemonConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.daemon.port, 8080);
+        // Other daemon settings should use defaults
+        assert_eq!(config.daemon.max_auto_restarts, 10);
+        assert_eq!(config.daemon.health_check_interval_secs, 10);
         // Services should use defaults
         assert!(config.services.kv_enabled);
         assert!(config.services.sql_enabled);
@@ -166,6 +185,8 @@ port = 8080
         let config: DaemonConfig = toml::from_str(toml).unwrap();
         // All defaults
         assert_eq!(config.daemon.port, 9919);
+        assert_eq!(config.daemon.max_auto_restarts, 10);
+        assert_eq!(config.daemon.health_check_interval_secs, 10);
         assert!(config.services.kv_enabled);
         assert!(config.services.sql_enabled);
         assert!(config.services.storage_enabled);

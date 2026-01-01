@@ -143,6 +143,7 @@ pub(crate) struct AppState {
     sql: Option<SqlService>,
     storage: Option<StorageService>,
     cron: CronScheduler,
+    config: DaemonConfig,
 }
 
 type SharedState = Arc<RwLock<AppState>>;
@@ -232,6 +233,7 @@ pub async fn serve(port: u16, state_path: PathBuf, config: DaemonConfig) -> Resu
         sql,
         storage,
         cron,
+        config,
     }));
 
     // Clone state for shutdown handler
@@ -433,17 +435,11 @@ async fn graceful_shutdown(state: SharedState) {
     tracing::info!("Graceful shutdown complete");
 }
 
-/// Maximum number of auto-restarts before giving up.
-const MAX_AUTO_RESTARTS: u32 = 10;
-
 /// Base backoff delay in seconds for auto-restart.
 const BASE_BACKOFF_SECS: u64 = 5;
 
 /// Maximum backoff delay in seconds.
 const MAX_BACKOFF_SECS: u64 = 300; // 5 minutes
-
-/// Health check interval in seconds.
-const HEALTH_CHECK_INTERVAL_SECS: u64 = 10;
 
 /// Background task that monitors instance health and auto-restarts crashed instances.
 async fn instance_health_check_task(
@@ -452,8 +448,14 @@ async fn instance_health_check_task(
 ) {
     tracing::info!("Instance health check task started");
 
+    // Get health check interval from config
+    let health_check_interval_secs = {
+        let state = state.read().await;
+        state.config.daemon.health_check_interval_secs
+    };
+
     let mut interval =
-        tokio::time::interval(std::time::Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS));
+        tokio::time::interval(std::time::Duration::from_secs(health_check_interval_secs));
 
     loop {
         tokio::select! {
@@ -470,10 +472,10 @@ async fn instance_health_check_task(
 
 /// Checks all running instances and attempts to recover crashed ones.
 async fn check_and_recover_instances(state: &SharedState) {
-    // Extract the store first to avoid holding the lock during blocking operations
-    let store = {
+    // Extract the store and config first to avoid holding the lock during blocking operations
+    let (store, max_auto_restarts) = {
         let state = state.read().await;
-        state.store.clone()
+        (state.store.clone(), state.config.daemon.max_auto_restarts)
     };
 
     // Get all instances using async method
@@ -486,12 +488,16 @@ async fn check_and_recover_instances(state: &SharedState) {
     };
 
     for instance in instances {
-        check_and_recover_single_instance(&store, instance).await;
+        check_and_recover_single_instance(&store, instance, max_auto_restarts).await;
     }
 }
 
 /// Check a single instance and attempt recovery if crashed.
-async fn check_and_recover_single_instance(store: &StateStore, instance: Instance) {
+async fn check_and_recover_single_instance(
+    store: &StateStore,
+    instance: Instance,
+    max_auto_restarts: u32,
+) {
     // Only check instances marked as Running
     if instance.status != Status::Running {
         return;
@@ -516,11 +522,11 @@ async fn check_and_recover_single_instance(store: &StateStore, instance: Instanc
     }
 
     // Instance crashed - handle recovery
-    handle_crashed_instance(store, instance).await;
+    handle_crashed_instance(store, instance, max_auto_restarts).await;
 }
 
 /// Handle a crashed instance: update status and attempt auto-restart if enabled.
-async fn handle_crashed_instance(store: &StateStore, instance: Instance) {
+async fn handle_crashed_instance(store: &StateStore, instance: Instance, max_auto_restarts: u32) {
     tracing::warn!(
         instance = %instance.name,
         pid = instance.pid,
@@ -550,18 +556,18 @@ async fn handle_crashed_instance(store: &StateStore, instance: Instance) {
     }
 
     // Attempt auto-restart with backoff
-    attempt_auto_restart(store, &instance).await;
+    attempt_auto_restart(store, &instance, max_auto_restarts).await;
 }
 
 /// Attempt to auto-restart a crashed instance with exponential backoff.
-async fn attempt_auto_restart(store: &StateStore, instance: &Instance) {
+async fn attempt_auto_restart(store: &StateStore, instance: &Instance, max_auto_restarts: u32) {
     // Check if we've exceeded max restarts
-    if instance.restart_count >= MAX_AUTO_RESTARTS {
+    if instance.restart_count >= max_auto_restarts {
         tracing::error!(
             instance = %instance.name,
             restart_count = instance.restart_count,
             "Max auto-restarts ({}) exceeded, giving up",
-            MAX_AUTO_RESTARTS
+            max_auto_restarts
         );
         return;
     }
@@ -816,6 +822,7 @@ mod tests {
             sql,
             storage,
             cron,
+            config: DaemonConfig::default(),
         }));
 
         Router::new()
@@ -1408,6 +1415,7 @@ mod tests {
             sql,
             storage,
             cron,
+            config: DaemonConfig::default(),
         }));
 
         Router::new()

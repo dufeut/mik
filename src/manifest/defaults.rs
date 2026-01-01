@@ -51,6 +51,21 @@ pub const fn default_shutdown_timeout() -> u64 {
     30
 }
 
+/// Default log max size in MB (10).
+pub const fn default_log_max_size_mb() -> usize {
+    10
+}
+
+/// Default max log files to keep (5).
+pub const fn default_log_max_files() -> usize {
+    5
+}
+
+/// Default watch debounce in milliseconds (300).
+pub const fn default_watch_debounce_ms() -> u64 {
+    300
+}
+
 // =============================================================================
 // Composition Defaults
 // =============================================================================

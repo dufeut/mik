@@ -10,10 +10,11 @@ use super::defaults::{
     default_auto, default_execution_timeout, default_health_check_interval_ms,
     default_health_check_path, default_health_check_timeout_ms, default_health_check_type,
     default_healthy_threshold, default_http_handler, default_http2_only, default_lb_enabled,
-    default_max_body_size_mb, default_max_connections_per_backend, default_modules_dir,
-    default_pool_idle_timeout_secs, default_port, default_request_timeout_secs,
-    default_service_name, default_shutdown_timeout, default_tcp_keepalive_secs,
-    default_tracing_enabled, default_unhealthy_threshold, default_version,
+    default_log_max_files, default_log_max_size_mb, default_max_body_size_mb,
+    default_max_connections_per_backend, default_modules_dir, default_pool_idle_timeout_secs,
+    default_port, default_request_timeout_secs, default_service_name, default_shutdown_timeout,
+    default_tcp_keepalive_secs, default_tracing_enabled, default_unhealthy_threshold,
+    default_version, default_watch_debounce_ms,
 };
 
 // =============================================================================
@@ -151,6 +152,15 @@ pub struct ServerConfig {
     /// Graceful shutdown drain timeout in seconds (default: 30)
     #[serde(default = "default_shutdown_timeout")]
     pub shutdown_timeout_secs: u64,
+    /// Maximum log file size in MB before rotation (default: 10)
+    #[serde(default = "default_log_max_size_mb")]
+    pub log_max_size_mb: usize,
+    /// Maximum number of rotated log files to keep (default: 5)
+    #[serde(default = "default_log_max_files")]
+    pub log_max_files: usize,
+    /// File watch debounce duration in milliseconds (default: 300)
+    #[serde(default = "default_watch_debounce_ms")]
+    pub watch_debounce_ms: u64,
     /// Enable wasi:logging for WASM modules (default: false).
     #[serde(default)]
     pub logging: bool,
@@ -178,6 +188,9 @@ impl Default for ServerConfig {
             max_concurrent_requests: 0, // 0 = auto-detect
             max_per_module_requests: 0, // 0 = auto-detect
             shutdown_timeout_secs: default_shutdown_timeout(),
+            log_max_size_mb: default_log_max_size_mb(),
+            log_max_files: default_log_max_files(),
+            watch_debounce_ms: default_watch_debounce_ms(),
             logging: false,
             http_allowed: Vec::new(),
         }

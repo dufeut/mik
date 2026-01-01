@@ -47,14 +47,18 @@ utils = { path = "../utils" }
 
 ## [server] Section
 
-| Field          | Type   | Default      | Description                                     |
-| -------------- | ------ | ------------ | ----------------------------------------------- |
-| `port`         | number | `3000`       | HTTP server port                                |
-| `modules`      | string | `"modules/"` | WASM handlers directory                         |
-| `scripts`      | string | -            | JS/TS scripts directory (enables orchestration) |
-| `static`       | string | -            | Static files directory                          |
-| `cache_size`   | number | `100`        | Max cached modules                              |
-| `http_allowed` | array  | `[]`         | Allowed outgoing HTTP hosts                     |
+| Field                     | Type   | Default      | Description                                     |
+| ------------------------- | ------ | ------------ | ----------------------------------------------- |
+| `port`                    | number | `3000`       | HTTP server port                                |
+| `modules`                 | string | `"modules/"` | WASM handlers directory                         |
+| `scripts`                 | string | -            | JS/TS scripts directory (enables orchestration) |
+| `static`                  | string | -            | Static files directory                          |
+| `cache_size`              | number | `100`        | Max cached modules                              |
+| `http_allowed`            | array  | `[]`         | Allowed outgoing HTTP hosts                     |
+| `shutdown_timeout_secs`   | number | `30`         | Graceful shutdown drain timeout                 |
+| `log_max_size_mb`         | number | `10`         | Max log file size before rotation               |
+| `log_max_files`           | number | `5`          | Max rotated log files to keep                   |
+| `watch_debounce_ms`       | number | `300`        | File watch debounce duration                    |
 
 ### http_allowed Patterns
 
@@ -149,6 +153,12 @@ max_body_size_mb = 10             # Max request body size
 # Cache settings
 cache_size = 100                  # Max cached modules
 max_cache_mb = 256                # Cache memory limit
+
+# Lifecycle settings
+shutdown_timeout_secs = 30        # Graceful shutdown drain time
+log_max_size_mb = 10              # Log rotation size
+log_max_files = 5                 # Max log files to keep
+watch_debounce_ms = 300           # File watcher debounce
 ```
 
 ## [tracing] Section
@@ -232,6 +242,9 @@ max_cache_mb = 512
 execution_timeout_secs = 30
 max_concurrent_requests = 2000
 max_per_module_requests = 50
+shutdown_timeout_secs = 60
+log_max_size_mb = 50
+log_max_files = 10
 http_allowed = ["*.internal.example.com"]
 
 [composition]

@@ -9,6 +9,8 @@ use tower::ServiceExt;
 
 /// Create a test router with all service routes.
 async fn create_test_app() -> Router {
+    use crate::daemon::config::DaemonConfig;
+
     let temp_dir = tempfile::tempdir().unwrap();
     let data_dir = temp_dir.path().to_path_buf();
 
@@ -24,10 +26,11 @@ async fn create_test_app() -> Router {
 
     let app_state = Arc::new(RwLock::new(AppState {
         store,
-        kv,
-        sql,
-        storage,
+        kv: Some(kv),
+        sql: Some(sql),
+        storage: Some(storage),
         cron,
+        config: DaemonConfig::default(),
     }));
 
     Router::new()
@@ -598,6 +601,8 @@ async fn test_kv_invalid_json() {
 
 /// Create a test app with the API key auth middleware layer.
 async fn create_test_app_with_auth() -> Router {
+    use crate::daemon::config::DaemonConfig;
+
     let temp_dir = tempfile::tempdir().unwrap();
     let data_dir = temp_dir.path().to_path_buf();
     let data_dir: &'static std::path::Path = Box::leak(Box::new(data_dir));
@@ -610,10 +615,11 @@ async fn create_test_app_with_auth() -> Router {
 
     let app_state = Arc::new(RwLock::new(AppState {
         store,
-        kv,
-        sql,
-        storage,
+        kv: Some(kv),
+        sql: Some(sql),
+        storage: Some(storage),
         cron,
+        config: DaemonConfig::default(),
     }));
 
     Router::new()

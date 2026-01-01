@@ -125,15 +125,26 @@ Create `~/.mik/daemon.toml`:
 
 ```toml
 [daemon]
-port = 9919                  # Daemon API port (default: 9919)
+port = 9919                       # Daemon API port (default: 9919)
+max_auto_restarts = 10            # Max auto-restarts before giving up (default: 10)
+health_check_interval_secs = 10   # Health check interval (default: 10)
 
 [services]
-kv_enabled = true            # Enable KV service (default: true)
-sql_enabled = true           # Enable SQL service (default: true)
-storage_enabled = true       # Enable Storage service (default: true)
+kv_enabled = true                 # Enable KV service (default: true)
+sql_enabled = true                # Enable SQL service (default: true)
+storage_enabled = true            # Enable Storage service (default: true)
 ```
 
 If the file doesn't exist, all defaults are used (all services enabled, port 9919).
+
+| Field                        | Type    | Default | Description                              |
+| ---------------------------- | ------- | ------- | ---------------------------------------- |
+| `daemon.port`                | number  | `9919`  | Daemon API port                          |
+| `daemon.max_auto_restarts`   | number  | `10`    | Max auto-restart attempts before giving up |
+| `daemon.health_check_interval_secs` | number | `10` | Interval between health checks (seconds) |
+| `services.kv_enabled`        | boolean | `true`  | Enable KV service                        |
+| `services.sql_enabled`       | boolean | `true`  | Enable SQL service                       |
+| `services.storage_enabled`   | boolean | `true`  | Enable Storage service                   |
 
 ### Disabling Services
 
@@ -196,6 +207,8 @@ mik daemon --port 8080
 | Stateless handlers | Disable SQL, Storage - KV only for sessions |
 | Read-only deployment | Disable all services |
 | Docker/container | Set consistent port across environments |
+| High availability | Increase `max_auto_restarts`, decrease `health_check_interval_secs` |
+| Debug/testing | Disable auto-restart with `max_auto_restarts = 0` |
 
 ---
 
