@@ -3,6 +3,8 @@
 //! Scaffolds projects for multiple languages:
 //! - Rust (default): mik-sdk based HTTP handlers
 //! - `TypeScript`: jco + esbuild workflow
+//!
+//! WIT interfaces are fetched from OCI registry to ensure consistency with the bridge.
 
 mod github;
 mod interactive;
@@ -14,6 +16,11 @@ use std::path::Path;
 use std::process::Command;
 
 pub use templates::{Language, Template};
+
+/// OCI reference for the WIT package.
+const WIT_OCI_REF: &str = "ghcr.io/dufeut/mik-sdk-wit";
+/// Default location for cached WIT in user's home directory.
+const WIT_CACHE_PATH: &str = ".mik/tools/wit/core.wit";
 
 /// Options for creating a new project.
 #[derive(Debug, Clone)]
@@ -43,7 +50,7 @@ impl Default for NewOptions {
 }
 
 /// Create a new mik project.
-pub fn execute(options: NewOptions) -> Result<()> {
+pub async fn execute(options: NewOptions) -> Result<()> {
     let project_dir = Path::new(&options.name);
 
     // Extract just the directory name for the project name
@@ -72,6 +79,9 @@ pub fn execute(options: NewOptions) -> Result<()> {
 
     println!("Creating new {lang} project: {project_name} (template: {template})");
 
+    // Fetch WIT from OCI (or use cached version)
+    let wit_content = fetch_wit().await?;
+
     // Create project directory
     fs::create_dir_all(project_dir).context("Failed to create project directory")?;
 
@@ -89,7 +99,7 @@ pub fn execute(options: NewOptions) -> Result<()> {
     };
 
     // Generate project files from template
-    templates::generate_project(project_dir, lang, template, &ctx)?;
+    templates::generate_project(project_dir, lang, template, &ctx, &wit_content)?;
 
     // Initialize git repository
     let _ = Command::new("git")
@@ -105,6 +115,64 @@ pub fn execute(options: NewOptions) -> Result<()> {
     print_next_steps(project_name, lang);
 
     Ok(())
+}
+
+/// Fetch WIT content from OCI registry or cache.
+///
+/// Discovery order:
+/// 1. Check ~/.mik/tools/wit/core.wit (cached)
+/// 2. Download from OCI registry and cache
+async fn fetch_wit() -> Result<String> {
+    // Check cached version first
+    if let Some(home) = dirs::home_dir() {
+        let cache_path = home.join(WIT_CACHE_PATH);
+        if cache_path.exists() {
+            return fs::read_to_string(&cache_path).context("Failed to read cached WIT");
+        }
+    }
+
+    // Download from OCI
+    println!("Fetching WIT interface from registry...");
+    let wit_content = download_wit().await?;
+
+    // Cache for future use
+    if let Some(home) = dirs::home_dir() {
+        let cache_path = home.join(WIT_CACHE_PATH);
+        if let Some(parent) = cache_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&cache_path, &wit_content);
+    }
+
+    Ok(wit_content)
+}
+
+/// Download WIT from OCI registry.
+async fn download_wit() -> Result<String> {
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let temp_path = home.join(".mik/tools/wit/temp.wit");
+
+    // Create directory if needed
+    if let Some(parent) = temp_path.parent() {
+        fs::create_dir_all(parent).context("Failed to create WIT cache directory")?;
+    }
+
+    // Use pull_oci to download
+    super::pull::pull_oci(WIT_OCI_REF, &temp_path)
+        .await
+        .context("Failed to download WIT from registry")?;
+
+    // Read content
+    let content = fs::read_to_string(&temp_path).context("Failed to read downloaded WIT")?;
+
+    // Move to final location
+    let final_path = home.join(WIT_CACHE_PATH);
+    fs::rename(&temp_path, &final_path)
+        .or_else(|_| fs::copy(&temp_path, &final_path).map(|_| ()))
+        .context("Failed to cache WIT")?;
+
+    Ok(content)
 }
 
 /// Print next steps based on language.

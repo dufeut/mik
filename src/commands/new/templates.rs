@@ -1,6 +1,6 @@
-//! Embedded templates for project scaffolding.
+//! Templates for project scaffolding.
 //!
-//! Templates are embedded at compile-time using `include_str!()`.
+//! WIT interfaces are fetched from OCI registry to ensure consistency with the bridge.
 
 use std::fmt;
 use std::fs;
@@ -116,16 +116,19 @@ impl TemplateContext {
     }
 }
 
-/// Generate a project from embedded templates.
+/// Generate a project from templates.
+///
+/// WIT content is passed in from OCI download to ensure consistency with bridge.
 pub fn generate_project(
     dir: &Path,
     lang: Language,
     template: Template,
     ctx: &TemplateContext,
+    wit_content: &str,
 ) -> Result<()> {
     match lang {
-        Language::Rust => generate_rust_project(dir, template, ctx),
-        Language::TypeScript => generate_typescript_project(dir, template, ctx),
+        Language::Rust => generate_rust_project(dir, template, ctx, wit_content),
+        Language::TypeScript => generate_typescript_project(dir, template, ctx, wit_content),
     }
 }
 
@@ -141,7 +144,12 @@ fn create_common_dirs(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn generate_rust_project(dir: &Path, template: Template, ctx: &TemplateContext) -> Result<()> {
+fn generate_rust_project(
+    dir: &Path,
+    template: Template,
+    ctx: &TemplateContext,
+    wit_content: &str,
+) -> Result<()> {
     // Create directories
     create_common_dirs(dir)?;
     fs::create_dir_all(dir.join("modules")).context("failed to create modules directory")?;
@@ -162,10 +170,10 @@ fn generate_rust_project(dir: &Path, template: Template, ctx: &TemplateContext) 
     let lib_rs = ctx.render(&format!("{RUST_LIB_HEADER}{lib_content}"));
     fs::write(dir.join("src/lib.rs"), &lib_rs).context("failed to write src/lib.rs")?;
 
-    // WIT files
+    // WIT files (fetched from OCI)
     let world_wit = ctx.render(RUST_WORLD_WIT);
     fs::write(dir.join("wit/world.wit"), &world_wit).context("failed to write wit/world.wit")?;
-    fs::write(dir.join("wit/deps/core/core.wit"), CORE_WIT)
+    fs::write(dir.join("wit/deps/core/core.wit"), wit_content)
         .context("failed to write wit/deps/core/core.wit")?;
 
     // .gitignore
@@ -186,6 +194,7 @@ fn generate_typescript_project(
     dir: &Path,
     template: Template,
     ctx: &TemplateContext,
+    wit_content: &str,
 ) -> Result<()> {
     // Currently only Basic template is supported for TypeScript
     // This match ensures consistency with generate_rust_project signature
@@ -215,10 +224,10 @@ fn generate_typescript_project(
     fs::write(dir.join("src/component.ts"), &component_ts)
         .context("failed to write src/component.ts")?;
 
-    // WIT files for mik:core/handler (embedded, no fetch needed)
+    // WIT files (fetched from OCI)
     fs::write(dir.join("wit/handler.wit"), TS_HANDLER_WIT)
         .context("failed to write wit/handler.wit")?;
-    fs::write(dir.join("wit/deps/core/core.wit"), CORE_WIT)
+    fs::write(dir.join("wit/deps/core/core.wit"), wit_content)
         .context("failed to write wit/deps/core/core.wit")?;
 
     // README.md
@@ -427,41 +436,6 @@ const RUST_WORLD_WIT: &str = r"package mik:{{PROJECT_NAME}}@{{VERSION}};
 world {{PROJECT_NAME}} {
     // Export the handler
     export mik:core/handler@0.1.0;
-}
-";
-
-const CORE_WIT: &str = r"package mik:core@0.1.0;
-
-/// Minimal handler interface - all types inline.
-interface handler {
-    /// HTTP methods.
-    enum method {
-        %get,
-        %post,
-        %put,
-        %patch,
-        %delete,
-        %head,
-        %options,
-    }
-
-    /// HTTP request data from the bridge.
-    record request-data {
-        method: method,
-        path: string,
-        headers: list<tuple<string, string>>,
-        body: option<list<u8>>,
-    }
-
-    /// HTTP response.
-    record response {
-        status: u16,
-        headers: list<tuple<string, string>>,
-        body: option<list<u8>>,
-    }
-
-    /// Process an HTTP request and return a response.
-    handle: func(req: request-data) -> response;
 }
 ";
 

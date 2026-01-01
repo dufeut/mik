@@ -527,7 +527,7 @@ async fn main() -> Result<()> {
                 github_template,
             };
 
-            commands::new::execute(options)?;
+            commands::new::execute(options).await?;
         },
         #[cfg(feature = "registry")]
         Commands::Add {
