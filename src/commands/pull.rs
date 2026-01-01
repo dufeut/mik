@@ -3,6 +3,10 @@
 //! Downloads components from OCI registries or HTTP URLs.
 //! Components are stored in `modules/` directory.
 //!
+//! OCI artifacts are cached globally in `~/.cache/mik/oci/` using
+//! content-addressable storage (digest-based). This allows reuse
+//! across multiple projects.
+//!
 //! OCI is the preferred method. HTTP is supported as fallback.
 
 use anyhow::{Context, Result};
@@ -16,6 +20,45 @@ use tokio::io::AsyncWriteExt;
 
 use crate::manifest::{Dependency, Manifest};
 use crate::registry;
+
+/// Get the OCI cache directory for content-addressable storage.
+fn get_oci_cache_dir() -> Result<PathBuf> {
+    let cache_dir = dirs::cache_dir()
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine cache directory"))?
+        .join("mik")
+        .join("oci")
+        .join("blobs");
+    Ok(cache_dir)
+}
+
+/// Get cached blob path from digest.
+fn get_cached_blob_path(digest: &str) -> Result<PathBuf> {
+    let cache_dir = get_oci_cache_dir()?;
+
+    // Digest format: "sha256:abc123..."
+    let (algo, hash) = digest
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("Invalid digest format: {digest}"))?;
+
+    Ok(cache_dir.join(algo).join(hash))
+}
+
+/// Check if a blob is cached and return its path.
+fn get_cached_blob(digest: &str) -> Option<PathBuf> {
+    get_cached_blob_path(digest).ok().filter(|p| p.exists())
+}
+
+/// Save a blob to the cache.
+fn cache_blob(digest: &str, data: &[u8]) -> Result<PathBuf> {
+    let path = get_cached_blob_path(digest)?;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::write(&path, data)?;
+    Ok(path)
+}
 
 /// Pull a single dependency.
 async fn pull_dependency(name: &str, dep: &Dependency) -> Result<String> {
@@ -82,7 +125,11 @@ fn is_oci_reference(registry: &str) -> bool {
     !registry.starts_with("http://") && !registry.starts_with("https://")
 }
 
-/// Pull from OCI registry using oci-client.
+/// Pull from OCI registry using oci-client with content-addressable caching.
+///
+/// Blobs are cached globally in `~/.cache/mik/oci/blobs/{algo}/{hash}`.
+/// If the blob is already cached (by digest), it's copied directly without
+/// downloading, enabling reuse across multiple projects.
 pub async fn pull_oci(oci_ref: &str, output_path: &Path) -> Result<()> {
     // Parse the OCI reference
     let reference: Reference = oci_ref
@@ -129,16 +176,33 @@ pub async fn pull_oci(oci_ref: &str, output_path: &Path) -> Result<()> {
         .or_else(|| layers.first())
         .ok_or_else(|| anyhow::anyhow!("No suitable layer found in {oci_ref}"))?;
 
-    // Pull the blob
+    // Check if blob is already cached
+    if let Some(cached_path) = get_cached_blob(&wasm_layer.digest) {
+        // Cache hit - copy from cache
+        fs::copy(&cached_path, output_path)
+            .with_context(|| format!("Failed to copy cached blob to {}", output_path.display()))?;
+        return Ok(());
+    }
+
+    // Cache miss - download blob to memory first for caching
+    let mut blob_data = Vec::new();
+    client
+        .pull_blob(&reference, wasm_layer, &mut blob_data)
+        .await
+        .with_context(|| format!("Failed to pull blob from {oci_ref}"))?;
+
+    // Cache the blob for future use
+    if let Err(e) = cache_blob(&wasm_layer.digest, &blob_data) {
+        // Log but don't fail if caching fails
+        tracing::warn!("Failed to cache blob {}: {e}", wasm_layer.digest);
+    }
+
+    // Write to output path
     let mut file = File::create(output_path)
         .await
         .with_context(|| format!("Failed to create {}", output_path.display()))?;
 
-    client
-        .pull_blob(&reference, wasm_layer, &mut file)
-        .await
-        .with_context(|| format!("Failed to pull blob from {oci_ref}"))?;
-
+    file.write_all(&blob_data).await?;
     file.flush().await?;
 
     Ok(())
