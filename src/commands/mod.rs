@@ -3,10 +3,11 @@
 //! This module contains all the CLI command handlers that power the mik CLI.
 //! Each submodule implements a specific command:
 //!
+//! - [`dev`] - Development server with watch mode and services
 //! - [`new`] - Project scaffolding and template generation
 //! - [`build`] - WASM component compilation and composition
-//! - [`run`] - Development server for local testing
-//! - [`daemon`] - Background process management (up/down/ps/logs)
+//! - [`run`] - Production-like server (foreground or detached)
+//! - [`daemon`] - Instance management (stop/ps/logs)
 //! - [`add`] - Dependency management (OCI/git/path)
 //! - [`publish`] - Push components to OCI registries
 //! - [`pull`] - Pull components from registries
@@ -19,6 +20,7 @@ pub mod add;
 pub mod build;
 pub mod cache;
 pub mod daemon;
+pub mod dev;
 pub mod new;
 #[cfg(feature = "registry")]
 pub mod publish;

@@ -37,204 +37,11 @@ pub async fn start(port: u16) -> Result<()> {
     crate::daemon::http::serve(port, state_path).await
 }
 
-/// Start a WASM instance in the background.
-///
-/// Spawns a new mik server process and tracks it in state.
-/// If `watch` is true, runs in foreground with hot reload enabled.
-pub async fn up(name: &str, port: u16, watch: bool) -> Result<()> {
-    let state_path = get_state_path()?;
-    let store = StateStore::open(&state_path)?;
-
-    // Check if instance already exists and is running
-    if let Some(existing) = store.get_instance(name)?
-        && existing.status == Status::Running
-        && process::is_running(existing.pid)?
-    {
-        println!(
-            "Instance '{}' is already running on port {}",
-            name, existing.port
-        );
-        return Ok(());
-    }
-
-    // Find mik.toml in current directory
-    let config_path = std::env::current_dir()?.join("mik.toml");
-    if !config_path.exists() {
-        anyhow::bail!(
-            "No mik.toml found in current directory. Run 'mik init' first or specify --config"
-        );
-    }
-
-    let working_dir = std::env::current_dir()?;
-
-    println!("Starting instance '{name}' on port {port}...");
-
-    let spawn_config = SpawnConfig {
-        name: name.to_string(),
-        port,
-        config_path: config_path.clone(),
-        working_dir: working_dir.clone(),
-        hot_reload: false, // AOT cache always enabled (content-addressed, works in watch mode)
-    };
-
-    let info = process::spawn_instance(&spawn_config)?;
-
-    // Save instance state
-    let instance = Instance {
-        name: name.to_string(),
-        port,
-        pid: info.pid,
-        status: Status::Running,
-        config: config_path.clone(),
-        started_at: Utc::now(),
-        modules: vec![], // Will be populated when we read mik.toml
-        auto_restart: false,
-        restart_count: 0,
-        last_restart_at: None,
-    };
-
-    store.save_instance(&instance)?;
-
-    println!("Instance '{}' started (PID: {})", name, info.pid);
-    println!("Logs: {}", info.log_path.display());
-    println!("\nAccess at: http://127.0.0.1:{port}");
-
-    // If watch mode is enabled, start file watcher
-    if watch {
-        run_watch_mode(
-            name,
-            &working_dir,
-            &config_path,
-            spawn_config,
-            info.pid,
-            &store,
-            instance,
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-/// Run watch mode for hot reloading.
-///
-/// Monitors modules directory and config file for changes, restarting the instance as needed.
-async fn run_watch_mode(
-    name: &str,
-    working_dir: &std::path::Path,
-    config_path: &std::path::Path,
-    spawn_config: SpawnConfig,
-    initial_pid: u32,
-    store: &StateStore,
-    instance: Instance,
-) -> Result<()> {
-    let modules_dir = working_dir.join("modules");
-
-    // Ensure modules directory exists
-    if !modules_dir.exists() {
-        std::fs::create_dir_all(&modules_dir)?;
-    }
-
-    println!();
-
-    // Track current instance for restart
-    let current_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(initial_pid));
-    let pid_clone = current_pid.clone();
-    let name_clone = name.to_string();
-    let spawn_config_clone = spawn_config.clone();
-
-    crate::daemon::watch::watch_loop(&modules_dir, config_path, move |event| {
-        handle_watch_event(event, &pid_clone, &name_clone, &spawn_config_clone);
-    })
-    .await?;
-
-    // Clean up on exit
-    let final_pid = current_pid.load(std::sync::atomic::Ordering::Relaxed);
-    if process::is_running(final_pid)? {
-        println!("[mik] Stopping instance...");
-        process::kill_instance(final_pid)?;
-    }
-
-    // Update state to stopped
-    let mut stopped = store.get_instance(name)?.unwrap_or(instance);
-    stopped.status = Status::Stopped;
-    store.save_instance(&stopped)?;
-
-    Ok(())
-}
-
-/// Handle a single watch event by restarting the instance if needed.
-fn handle_watch_event(
-    event: crate::daemon::watch::WatchEvent,
-    pid: &std::sync::Arc<std::sync::atomic::AtomicU32>,
-    name: &str,
-    spawn_config: &SpawnConfig,
-) {
-    use crate::daemon::watch::WatchEvent;
-
-    match event {
-        WatchEvent::ModuleChanged { .. } | WatchEvent::ConfigChanged => {
-            let old_pid = pid.load(std::sync::atomic::Ordering::Relaxed);
-
-            // Kill old process
-            if process::is_running(old_pid).unwrap_or(false)
-                && let Err(e) = process::kill_instance(old_pid)
-            {
-                eprintln!("[mik] Failed to stop old instance: {e}");
-                return;
-            }
-
-            // Spawn new process
-            let start = std::time::Instant::now();
-            match process::spawn_instance(spawn_config) {
-                Ok(new_info) => {
-                    pid.store(new_info.pid, std::sync::atomic::Ordering::Relaxed);
-                    println!(
-                        "[mik] Reloaded {} (took {}ms)",
-                        name,
-                        start.elapsed().as_millis()
-                    );
-
-                    // Update state
-                    update_instance_state_after_reload(name, spawn_config, new_info.pid);
-                },
-                Err(e) => {
-                    eprintln!("[mik] Failed to restart: {e}");
-                },
-            }
-        },
-        WatchEvent::ModuleRemoved { .. } => {
-            // Just log, don't restart
-        },
-        WatchEvent::Error { message } => {
-            eprintln!("[mik] Watch error: {message}");
-        },
-    }
-}
-
-/// Update instance state in the store after a hot reload.
-fn update_instance_state_after_reload(name: &str, spawn_config: &SpawnConfig, new_pid: u32) {
-    if let Some(store) = get_state_path().ok().and_then(|p| StateStore::open(p).ok()) {
-        let updated = Instance {
-            name: name.to_string(),
-            port: spawn_config.port,
-            pid: new_pid,
-            status: Status::Running,
-            config: spawn_config.config_path.clone(),
-            started_at: Utc::now(),
-            modules: vec![],
-            auto_restart: false,
-            restart_count: 0,
-            last_restart_at: None,
-        };
-        let _ = store.save_instance(&updated);
-    }
-}
-
 /// Stop a running WASM instance.
 ///
 /// Gracefully terminates the process and updates state.
-pub fn down(name: &str) -> Result<()> {
+/// Auto-exits daemon if this was the last running instance.
+pub async fn stop(name: &str) -> Result<()> {
     let state_path = get_state_path()?;
     let store = StateStore::open(&state_path)?;
 
@@ -264,7 +71,164 @@ pub fn down(name: &str) -> Result<()> {
 
     println!("Instance '{name}' stopped");
 
+    // Check if daemon should auto-exit (no more running instances)
+    check_daemon_auto_exit(&store)?;
+
     Ok(())
+}
+
+/// Check if daemon should auto-exit when no instances are running.
+fn check_daemon_auto_exit(store: &StateStore) -> Result<()> {
+    let instances = store.list_instances()?;
+    let running_count = instances
+        .iter()
+        .filter(|i| i.status == Status::Running && process::is_running(i.pid).unwrap_or(false))
+        .count();
+
+    if running_count == 0 {
+        // No running instances, stop daemon if running
+        if let Some(daemon_pid) = get_daemon_pid() {
+            println!("No running instances, stopping daemon...");
+            process::kill_instance(daemon_pid)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Get daemon PID if running.
+fn get_daemon_pid() -> Option<u32> {
+    let state_path = get_state_path().ok()?;
+    let daemon_pid_path = state_path.parent()?.join("daemon.pid");
+    std::fs::read_to_string(daemon_pid_path)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Run instance in detached mode with auto-daemon.
+///
+/// Auto-starts daemon if not running, then creates the instance.
+pub async fn run_detached(name: &str, port: u16) -> Result<()> {
+    // Ensure daemon is running
+    ensure_daemon_running().await?;
+
+    // Now start the instance (reuse up logic)
+    let state_path = get_state_path()?;
+    let store = StateStore::open(&state_path)?;
+
+    // Check if instance already exists and is running
+    if let Some(existing) = store.get_instance(name)?
+        && existing.status == Status::Running
+        && process::is_running(existing.pid)?
+    {
+        println!(
+            "Instance '{}' is already running on port {}",
+            name, existing.port
+        );
+        return Ok(());
+    }
+
+    // Find mik.toml in current directory
+    let config_path = std::env::current_dir()?.join("mik.toml");
+    if !config_path.exists() {
+        anyhow::bail!("No mik.toml found in current directory.");
+    }
+
+    let working_dir = std::env::current_dir()?;
+
+    println!("Starting instance '{name}' on port {port}...");
+
+    let spawn_config = SpawnConfig {
+        name: name.to_string(),
+        port,
+        config_path: config_path.clone(),
+        working_dir: working_dir.clone(),
+        hot_reload: false,
+    };
+
+    let info = process::spawn_instance(&spawn_config)?;
+
+    // Save instance state
+    let instance = Instance {
+        name: name.to_string(),
+        port,
+        pid: info.pid,
+        status: Status::Running,
+        config: config_path.clone(),
+        started_at: Utc::now(),
+        modules: vec![],
+        auto_restart: false,
+        restart_count: 0,
+        last_restart_at: None,
+    };
+
+    store.save_instance(&instance)?;
+
+    println!("Instance '{}' started (PID: {})", name, info.pid);
+    println!("Logs: {}", info.log_path.display());
+    println!("\nAccess at: http://127.0.0.1:{port}");
+    println!("\nManage with:");
+    println!("  mik ps          # List instances");
+    println!("  mik logs {name}   # View logs");
+    println!("  mik stop {name}   # Stop instance");
+
+    Ok(())
+}
+
+/// Ensure daemon is running, auto-start if not.
+async fn ensure_daemon_running() -> Result<()> {
+    const DAEMON_PORT: u16 = 9919;
+
+    // Check if daemon is already running
+    if is_daemon_running(DAEMON_PORT).await {
+        return Ok(());
+    }
+
+    println!("Starting daemon...");
+
+    // Get path to mik executable
+    let mik_exe = std::env::current_exe()?;
+
+    // Spawn daemon in background
+    let state_path = get_state_path()?;
+    let daemon_log = state_path.parent().unwrap().join("logs").join("daemon.log");
+    std::fs::create_dir_all(daemon_log.parent().unwrap())?;
+
+    let log_file = std::fs::File::create(&daemon_log)?;
+
+    let child = std::process::Command::new(&mik_exe)
+        .args(["daemon", "--port", &DAEMON_PORT.to_string()])
+        .stdout(log_file.try_clone()?)
+        .stderr(log_file)
+        .spawn()
+        .context("Failed to start daemon")?;
+
+    // Save daemon PID
+    let daemon_pid_path = state_path.parent().unwrap().join("daemon.pid");
+    std::fs::write(&daemon_pid_path, child.id().to_string())?;
+
+    // Wait for daemon to be ready
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if is_daemon_running(DAEMON_PORT).await {
+            println!("Daemon started (PID: {})", child.id());
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("Daemon failed to start within 5 seconds")
+}
+
+/// Check if daemon is running by trying to connect.
+async fn is_daemon_running(port: u16) -> bool {
+    reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/health"))
+        .timeout(Duration::from_millis(500))
+        .send()
+        .await
+        .is_ok()
 }
 
 /// List all tracked WASM instances.
@@ -275,7 +239,7 @@ pub fn ps() -> Result<()> {
 
     // Check if state file exists
     if !state_path.exists() {
-        println!("No instances found. Start one with 'mik up'");
+        println!("No instances found. Start one with 'mik run --detach' or 'mik dev'");
         return Ok(());
     }
 
@@ -283,7 +247,7 @@ pub fn ps() -> Result<()> {
     let instances = store.list_instances()?;
 
     if instances.is_empty() {
-        println!("No instances found. Start one with 'mik up'");
+        println!("No instances found. Start one with 'mik run --detach' or 'mik dev'");
         return Ok(());
     }
 
@@ -333,7 +297,7 @@ pub async fn stats() -> Result<()> {
     let state_path = get_state_path()?;
 
     if !state_path.exists() {
-        println!("No instances found. Start one with 'mik up'");
+        println!("No instances found. Start one with 'mik run --detach' or 'mik dev'");
         return Ok(());
     }
 

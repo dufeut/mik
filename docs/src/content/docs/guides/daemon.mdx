@@ -9,11 +9,11 @@ The mik daemon is a background process that manages WASM instances and provides 
 
 mik supports three operating modes, each adding more capabilities:
 
-| Mode | Command | Services | Use Case |
-|------|---------|----------|----------|
-| **Direct** | `mik run` | None | Development, testing |
-| **Daemon** | `mik daemon` + `mik up` | Embedded (SQLite, KV, Storage, Cron) | Dev, small deployments |
-| **Sidecar** | Handler + mikcar | Production (Postgres, Redis, S3) | Scale, multi-node |
+| Mode        | Command                         | Services                             | Use Case               |
+| ----------- | ------------------------------- | ------------------------------------ | ---------------------- |
+| **Direct**  | `mik run`                       | None                                 | Quick testing          |
+| **Daemon**  | `mik dev` or `mik run --detach` | Embedded (SQLite, KV, Storage, Cron) | Dev, small deployments |
+| **Sidecar** | Handler + mikcar                | Production (Postgres, Redis, S3)     | Scale, multi-node      |
 
 ### Direct Mode
 
@@ -30,40 +30,44 @@ Handlers can only make outbound HTTP calls. No database, no cron, no storage.
 
 The daemon provides a **mini-sidecar** with embedded services:
 
-```
-┌─────────────────────────────────────────────────────┐
-│  mik daemon (port 9999)                             │
-│  ───────────────────────                            │
-│  Embedded services:                                 │
-│  • KV Store (redb)      • SQL (SQLite)              │
-│  • Storage (filesystem) • Cron (scheduled jobs)     │
-│                                                     │
-│  Good for: dev, prototyping, small deployments      │
-└─────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│  Handler instances (port 3000, 3001, ...)           │
-│  Call daemon services via HTTP                      │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Daemon["Daemon (port 9919, auto-managed)"]
+        KV["KV Store<br/>(redb)"]
+        SQL["SQL<br/>(SQLite)"]
+        Storage["Storage<br/>(filesystem)"]
+        Cron["Cron<br/>(scheduled jobs)"]
+    end
+
+    subgraph Handlers["Handler Instances"]
+        H1["myapp:3000"]
+        H2["api:3001"]
+    end
+
+    Handlers -->|HTTP| Daemon
 ```
 
-Handlers call `http://localhost:9999/kv/...`, `/sql/...`, etc.
+Handlers call `http://localhost:9919/kv/...`, `/sql/...`, etc.
 
 ### Sidecar Mode (mikcar)
 
 For production at scale, use [mikcar](https://github.com/dufeut/mikcar) instead:
 
-```
-┌─────────────────────────────────────────────────────┐
-│  mikcar (production sidecar)                        │
-│  ───────────────────────────                        │
-│  Real infrastructure:                               │
-│  • Redis/Valkey         • PostgreSQL/MySQL          │
-│  • S3/MinIO             • Real job queues           │
-│                                                     │
-│  Good for: production, scale, multi-node            │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Mikcar["mikcar (production sidecar)"]
+        Redis["Redis/Valkey"]
+        Postgres["PostgreSQL/MySQL"]
+        S3["S3/MinIO"]
+        Queue["Job Queues"]
+    end
+
+    subgraph Handlers["Handler Instances"]
+        H1["myapp:3000"]
+        H2["api:3001"]
+    end
+
+    Handlers -->|HTTP| Mikcar
 ```
 
 **Same HTTP API, different backends.** Your handler code doesn't change - just swap the sidecar.
@@ -72,12 +76,14 @@ For production at scale, use [mikcar](https://github.com/dufeut/mikcar) instead:
 
 ## Quick Start
 
-```bash
-# Start the daemon (default port 9999)
-mik daemon
+The daemon is **auto-managed** - it starts automatically when needed and stops when the last instance exits.
 
-# Start a WASM instance
-mik up --name myapp --port 3000
+```bash
+# Development mode (watch + services, foreground)
+mik dev
+
+# Or run as background instance (auto-starts daemon)
+mik run --detach --name myapp --port 3000
 
 # Check running instances
 mik ps
@@ -85,21 +91,21 @@ mik ps
 # View logs
 mik logs myapp -f
 
-# Stop the instance
-mik down myapp
+# Stop the instance (daemon auto-exits when last instance stops)
+mik stop myapp
 ```
 
 ## Authentication
 
-API key authentication is optional. Set `MIK_API_KEY` to enable it:
+API key authentication is optional. Set `MIK_API_KEY` before starting:
 
 ```bash
-# Enable authentication
+# Enable authentication (set before mik dev or mik run --detach)
 export MIK_API_KEY="your-secret-key"
-mik daemon
+mik dev
 
 # All requests must include the API key header
-curl -H "X-API-Key: your-secret-key" http://localhost:9999/instances
+curl -H "X-API-Key: your-secret-key" http://localhost:9919/instances
 ```
 
 **Exempt endpoints** (always accessible for monitoring):
@@ -145,8 +151,9 @@ GET /instances/{name}/logs?lines=100
 ### CLI Commands
 
 ```bash
-mik up [--name NAME] [--port PORT] [--watch]   # Start instance
-mik down [NAME]                                 # Stop instance
+mik dev [--port PORT] [--no-services]          # Development with watch + services
+mik run --detach [--name NAME] [--port PORT]   # Background instance
+mik stop [NAME]                                 # Stop instance
 mik ps                                          # List instances
 mik logs [NAME] [-f] [-n LINES]                # View logs
 ```
@@ -154,15 +161,15 @@ mik logs [NAME] [-f] [-n LINES]                # View logs
 ### Example: Start and Monitor
 
 ```bash
-# Start with hot reload for development
-mik up --name dev --port 3000 --watch
+# Start as background instance
+mik run --detach --name myapp --port 3000
 
 # Check status
-curl http://localhost:9999/instances/dev
+curl http://localhost:9919/instances/myapp
 
 # Response:
 {
-  "name": "dev",
+  "name": "myapp",
   "port": 3000,
   "status": "running",
   "pid": 12345,
@@ -199,15 +206,15 @@ GET /kv?prefix=user:
 
 ```bash
 # Store session with 1 hour TTL
-curl -X PUT http://localhost:9999/kv/session:abc123 \
+curl -X PUT http://localhost:9919/kv/session:abc123 \
   -H "Content-Type: application/json" \
   -d '{"value": "{\"user_id\": 42, \"role\": \"admin\"}", "ttl": 3600}'
 
 # Retrieve session
-curl http://localhost:9999/kv/session:abc123
+curl http://localhost:9919/kv/session:abc123
 
 # List all sessions
-curl "http://localhost:9999/kv?prefix=session:"
+curl "http://localhost:9919/kv?prefix=session:"
 ```
 
 ---
@@ -265,17 +272,17 @@ Content-Type: application/json
 
 ```bash
 # Create tables
-curl -X POST http://localhost:9999/sql/execute \
+curl -X POST http://localhost:9919/sql/execute \
   -H "Content-Type: application/json" \
   -d '{"sql": "CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, title TEXT, user_id INTEGER REFERENCES users(id))"}'
 
 # Insert with foreign key
-curl -X POST http://localhost:9999/sql/execute \
+curl -X POST http://localhost:9919/sql/execute \
   -H "Content-Type: application/json" \
   -d '{"sql": "INSERT INTO posts (title, user_id) VALUES (?, ?)", "params": ["Hello World", 1]}'
 
 # Query with join
-curl -X POST http://localhost:9999/sql/query \
+curl -X POST http://localhost:9919/sql/query \
   -H "Content-Type: application/json" \
   -d '{"sql": "SELECT p.title, u.name FROM posts p JOIN users u ON p.user_id = u.id"}'
 ```
@@ -309,20 +316,20 @@ GET /storage?prefix=images/
 
 ```bash
 # Upload an image
-curl -X PUT http://localhost:9999/storage/images/logo.png \
+curl -X PUT http://localhost:9919/storage/images/logo.png \
   -H "Content-Type: image/png" \
   --data-binary @logo.png
 
 # Get metadata
-curl -I http://localhost:9999/storage/images/logo.png
+curl -I http://localhost:9919/storage/images/logo.png
 # Headers: Content-Type, Content-Length, Last-Modified, ETag
 
 # List all images
-curl "http://localhost:9999/storage?prefix=images/"
+curl "http://localhost:9919/storage?prefix=images/"
 # Response: {"objects": [{"path": "images/logo.png", "size": 12345, ...}]}
 
 # Download
-curl http://localhost:9999/storage/images/logo.png -o downloaded.png
+curl http://localhost:9919/storage/images/logo.png -o downloaded.png
 ```
 
 ---
@@ -383,7 +390,7 @@ Uses 7-field format: `sec min hour day month weekday year`
 
 ```bash
 # Create job that runs every hour
-curl -X POST http://localhost:9999/cron \
+curl -X POST http://localhost:9919/cron \
   -H "Content-Type: application/json" \
   -d '{
     "name": "hourly-cleanup",
@@ -396,15 +403,15 @@ curl -X POST http://localhost:9999/cron \
   }'
 
 # Pause the job
-curl -X PATCH http://localhost:9999/cron/hourly-cleanup \
+curl -X PATCH http://localhost:9919/cron/hourly-cleanup \
   -H "Content-Type: application/json" \
   -d '{"enabled": false}'
 
 # Trigger manually for testing
-curl -X POST http://localhost:9999/cron/hourly-cleanup/trigger
+curl -X POST http://localhost:9919/cron/hourly-cleanup/trigger
 
 # Check execution history
-curl http://localhost:9999/cron/hourly-cleanup/history
+curl http://localhost:9919/cron/hourly-cleanup/history
 # Response:
 {
   "job_name": "hourly-cleanup",
@@ -477,13 +484,14 @@ GET /version
 ```mermaid
 flowchart TB
     subgraph CLI["CLI Commands"]
-        Up[mik up]
-        Down[mik down]
+        Dev[mik dev]
+        Run[mik run --detach]
+        Stop[mik stop]
         Ps[mik ps]
         Logs[mik logs]
     end
 
-    subgraph Daemon["mik daemon (port 9999)"]
+    subgraph Daemon["mik daemon (port 9919, auto-managed)"]
         API[REST API]
         Instances[Instance Manager]
         KV[KV Store<br/>redb]

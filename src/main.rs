@@ -4,9 +4,9 @@
 //!
 //! - Creating new projects (`mik new`)
 //! - Building WASM components (`mik build`)
-//! - Running development servers (`mik run`)
-//! - Managing background instances (`mik daemon`, `mik up`, `mik down`)
-//! - Publishing to OCI registries (`mik publish`, `mik pull`)
+//! - Running development servers (`mik dev`, `mik run`)
+//! - Managing background instances (`mik ps`, `mik stop`)
+//! - Publishing to OCI registries (`mik publish`, `mik sync`)
 //!
 //! See `mik --help` for full usage information.
 
@@ -76,53 +76,47 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     // =========================================================================
-    // Daemon Commands (Docker-like instance management)
+    // Development & Runtime
     // =========================================================================
-    /// Start the daemon for process management and scheduling
+    /// Start development server with watch mode and services
     ///
-    /// Starts a background daemon for managing WASM instances, cron jobs,
-    /// and service discovery. Exposes a REST API for remote management.
-    ///
-    /// Examples:
-    ///   mik daemon                 # Start on default port 9999
-    ///   mik daemon --port 8080     # Start on custom port
-    Daemon {
-        /// Port for the daemon API (default: 9999)
-        #[arg(short, long, default_value = "9999")]
-        port: u16,
-    },
-    /// Start a WASM instance in the background
-    ///
-    /// Spawns a new mik server as a background process.
-    /// Instances are tracked and can be managed with ps, down, logs commands.
+    /// Runs your WASM handlers with hot reload and embedded services
+    /// (KV, SQL, Storage, Cron). Auto-rebuilds on source changes.
     ///
     /// Examples:
-    ///   mik up                          # Start on port 3000 as "default"
-    ///   mik up --port 3001 --name dev   # Start on custom port with name
-    ///   mik up --watch                  # Start with hot reload enabled
-    Up {
-        /// Instance name (default: "default")
-        #[arg(short, long, default_value = "default")]
-        name: String,
+    ///   mik dev                    # Watch mode on port 3000
+    ///   mik dev --port 8080        # Custom port
+    ///   mik dev --no-services      # Skip embedded services
+    Dev {
         /// Port for the HTTP server (default: 3000)
         #[arg(short, long, default_value = "3000")]
         port: u16,
-        /// Watch for module changes and hot reload
-        #[arg(short, long)]
-        watch: bool,
+        /// Skip starting embedded services (KV, SQL, etc.)
+        #[arg(long)]
+        no_services: bool,
     },
-    /// Stop a running WASM instance
+    // =========================================================================
+    // Instance Management
+    // =========================================================================
+    /// Stop a running instance
     ///
     /// Gracefully stops the instance, waiting for in-flight requests.
     /// Falls back to forceful termination if graceful shutdown times out.
     ///
     /// Examples:
-    ///   mik down                   # Stop "default" instance
-    ///   mik down dev               # Stop named instance
-    Down {
+    ///   mik stop                   # Stop "default" instance
+    ///   mik stop myapp             # Stop named instance
+    Stop {
         /// Instance name to stop (default: "default")
         #[arg(default_value = "default")]
         name: String,
+    },
+    /// Start the daemon (internal, auto-managed)
+    #[command(hide = true)]
+    Daemon {
+        /// Port for the daemon API
+        #[arg(short, long, default_value = "9919")]
+        port: u16,
     },
     /// List running WASM instances
     ///
@@ -288,17 +282,26 @@ enum Commands {
     },
     /// Run the component with local development server
     ///
-    /// Starts a WASI HTTP server on <http://127.0.0.1:3000>.
-    /// Auto-detects component in target/ if not specified.
+    /// Starts a WASI HTTP server. Runs in foreground by default.
+    /// Use --detach to run as a background instance with services.
     ///
     /// Examples:
-    ///   mik run                          # Auto-detect latest build
-    ///   mik run target/composed.wasm     # Run specific component
-    ///   mik run --workers 4              # Start 4 workers on ports 3000-3003
-    ///   mik run --workers 0              # Auto-detect workers (one per CPU)
+    ///   mik run                          # Foreground, auto-detect component
+    ///   mik run --detach                 # Background with services
+    ///   mik run --detach --name prod     # Named background instance
+    ///   mik run --workers 4 --lb         # Multi-worker with load balancer
     Run {
         /// Path to component (default: auto-detect)
         component: Option<String>,
+
+        /// Run as background instance with embedded services (KV, SQL, Cron).
+        /// Auto-starts daemon if not running. Use `mik ps` to list instances.
+        #[arg(short, long)]
+        detach: bool,
+
+        /// Instance name when running detached (default: "default")
+        #[arg(short, long, default_value = "default")]
+        name: String,
 
         /// Number of worker processes for horizontal scaling.
         /// Use 0 for auto-detect (one worker per CPU core).
@@ -455,15 +458,17 @@ async fn main() -> Result<()> {
     };
 
     match command {
-        // Daemon commands
+        // Development
+        Commands::Dev { port, no_services } => {
+            commands::dev::execute(port, no_services).await?;
+        },
+
+        // Instance management
+        Commands::Stop { name } => {
+            commands::daemon::stop(&name).await?;
+        },
         Commands::Daemon { port } => {
             commands::daemon::start(port).await?;
-        },
-        Commands::Up { name, port, watch } => {
-            commands::daemon::up(&name, port, watch).await?;
-        },
-        Commands::Down { name } => {
-            commands::daemon::down(&name)?;
         },
         Commands::Ps => {
             commands::daemon::ps()?;
@@ -561,12 +566,20 @@ async fn main() -> Result<()> {
         },
         Commands::Run {
             component,
+            detach,
+            name,
             workers,
             port,
             local,
             lb,
         } => {
-            commands::run::execute(component.as_deref(), workers, port, local, lb).await?;
+            if detach {
+                // Background mode with daemon services
+                commands::daemon::run_detached(&name, port.unwrap_or(3000)).await?;
+            } else {
+                // Foreground mode
+                commands::run::execute(component.as_deref(), workers, port, local, lb).await?;
+            }
         },
         #[cfg(feature = "registry")]
         Commands::Publish { tag, dry_run } => {

@@ -33,9 +33,9 @@ cargo install mik
 mik new my-api
 cd my-api
 
-# Build and run
+# Build and run (dev mode with watch + services)
 mik build -rc
-mik run
+mik dev
 ```
 
 Test your API:
@@ -201,16 +201,26 @@ Output: `dist/my-api-composed.wasm`
 ### Run the Server
 
 ```bash
+# Development mode (watch + services)
+mik dev
+
+# Or foreground mode (no services)
 mik run
 ```
 
 Output:
 
 ```
-Starting server on http://127.0.0.1:3000
-Routes: /run/my-api/* -> component
-Health: /health
-Metrics: /metrics
+Starting development server...
+
+Services available at http://127.0.0.1:9919
+  KV:      /kv/:key
+  SQL:     /sql/query, /sql/execute
+  Storage: /storage/*path
+  Cron:    /cron
+
+Watching for changes...
+Server: http://127.0.0.1:3000
 ```
 
 ## Test Your API

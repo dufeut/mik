@@ -5,7 +5,7 @@
 //!
 //! ## Usage
 //!
-//! 1. Start the daemon: `mik api --port 9999`
+//! 1. Start the daemon: `mik api --port 9919`
 //! 2. Build this handler: `cargo component build --release`
 //! 3. Run with mik: `mik run target/wasm32-wasip1/release/daemon_test.wasm`
 //! 4. Test endpoints:
@@ -29,8 +29,8 @@ use bindings::wasi::http::{outgoing_handler, types as http_types};
 
 struct Component;
 
-/// Daemon HTTP API base URL (localhost:9999 is the default daemon port)
-const DAEMON_HOST: &str = "127.0.0.1:9999";
+/// Daemon HTTP API base URL (localhost:9919 is the default daemon port)
+const DAEMON_HOST: &str = "127.0.0.1:9919";
 
 impl Guest for Component {
     fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
@@ -75,7 +75,7 @@ fn home() -> (u16, String) {
   "service": "daemon-test",
   "version": "0.1.0",
   "description": "Tests mik daemon embedded services via HTTP",
-  "daemon_url": "http://127.0.0.1:9999",
+  "daemon_url": "http://127.0.0.1:9919",
   "endpoints": [
     "/",
     "/health",

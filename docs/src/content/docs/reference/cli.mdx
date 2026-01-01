@@ -86,6 +86,53 @@ mik build -rc
 
 ---
 
+### mik dev
+
+Start development server with watch mode and embedded services.
+
+```bash
+mik dev [OPTIONS]
+```
+
+**Options:**
+| Flag | Description |
+|------|-------------|
+| `--port <PORT>` | Server port (default: 3000) |
+| `--no-services` | Skip starting embedded services |
+
+**Features:**
+
+- Auto-rebuilds on source changes (watch mode)
+- Auto-starts daemon for embedded services (KV, SQL, Storage, Cron)
+- Runs in foreground with nice output
+- Graceful shutdown on Ctrl+C
+
+**Example:**
+
+```bash
+mik dev                    # Watch mode on port 3000
+mik dev --port 8080        # Custom port
+mik dev --no-services      # Skip embedded services
+```
+
+**Output:**
+
+```
+Starting development server...
+
+Services available at http://127.0.0.1:9919
+  KV:      /kv/:key
+  SQL:     /sql/query, /sql/execute
+  Storage: /storage/*path
+  Cron:    /cron
+
+Watching for changes...
+Server: http://127.0.0.1:3000
+Press Ctrl+C to stop
+```
+
+---
+
 ### mik run
 
 Start the HTTP server with the embedded runtime.
@@ -104,33 +151,36 @@ mik run [COMPONENT] [OPTIONS]
 |------|-------------|
 | `--port <PORT>` | Server port (default: 3000) |
 | `--workers <N>` | Number of worker processes (0 = auto) |
+| `--lb` | Enable integrated L7 load balancer |
+| `--local` | Bind to localhost only |
+| `--detach` | Run as background instance with services |
+| `--name <NAME>` | Instance name when detached (default: "default") |
 
 **Modes:**
 
 All modes use consistent `/run/<module>/*` routing.
 
-**Multi-module mode** (default):
+**Foreground mode** (default):
 
 ```bash
-mik run
+mik run                    # Multi-module from mik.toml
+mik run dist/api.wasm      # Single component
 ```
 
-- Uses `[server].modules` directory from mik.toml
-- Routes: `/run/<module>/*` -> `modules/<module>.wasm`
-
-**Single component mode**:
+**Detached mode** (background with services):
 
 ```bash
-mik run dist/my-api-composed.wasm
+mik run --detach           # Background instance
+mik run --detach --name prod --port 8080
 ```
 
-- Routes: `/run/<name>/*` -> component (name from filename)
+Auto-starts daemon if not running. Use `mik ps` to list instances.
 
-**Multi-worker mode**:
+**Multi-worker mode** (for performance):
 
 ```bash
-mik run --workers 4    # 4 workers on ports 3000-3003
-mik run --workers 0    # Auto-detect (one per CPU core)
+mik run --workers 4 --lb   # LB on 3000, workers on 3001-3004
+mik run --workers 0 --lb   # Auto-detect workers
 ```
 
 **Example output:**
@@ -253,61 +303,31 @@ mik cache <SUBCOMMAND>
 
 ---
 
-## Daemon Commands
+## Instance Management
 
-The daemon provides instance management and embedded services.
+Commands for managing background WASM instances. The daemon is auto-managed - it starts automatically when needed and stops when the last instance is stopped.
 
-### mik daemon
-
-Start the daemon HTTP API server.
-
-```bash
-mik daemon [OPTIONS]
-```
-
-**Options:**
-| Flag | Description |
-|------|-------------|
-| `--port <PORT>` | API port (default: 9999) |
-
-The daemon exposes:
-
-- Instance management: `/instances/*`
-- KV store: `/kv/*`
-- SQL database: `/sql/*`
-- Object storage: `/storage/*`
-- Cron scheduler: `/cron/*`
-- Prometheus metrics: `/metrics`
-- Health check: `/health`
-
-**Authentication:** Set `MIK_API_KEY` environment variable to require API key authentication.
-
----
-
-### mik up
-
-Start a WASM instance in the background.
-
-```bash
-mik up [OPTIONS]
-```
-
-**Options:**
-| Flag | Description |
-|------|-------------|
-| `--name <NAME>` | Instance name (default: "default") |
-| `--port <PORT>` | Server port (default: 3000) |
-| `--watch` | Enable hot reload |
-
----
-
-### mik down
+### mik stop
 
 Stop a running instance.
 
 ```bash
-mik down [NAME]
+mik stop [NAME]
 ```
+
+**Arguments:**
+| Argument | Description |
+|----------|-------------|
+| `NAME` | Instance name (default: "default") |
+
+**Example:**
+
+```bash
+mik stop              # Stop "default" instance
+mik stop prod         # Stop named instance
+```
+
+When the last instance is stopped, the daemon automatically exits.
 
 ---
 
@@ -358,9 +378,9 @@ mik logs [NAME] [OPTIONS]
 
 ---
 
-## Workflow Example
+## Workflow Examples
 
-Complete workflow for a new project:
+### Development Workflow
 
 ```bash
 # 1. Create project
@@ -370,20 +390,33 @@ cd my-api
 # 2. Build with composition
 mik build -rc
 
-# 3. Run the server
-mik run
+# 3. Start development server (watch mode + services)
+mik dev
 
 # 4. Test
 curl http://localhost:3000/health
 curl http://localhost:3000/run/my-api/
 ```
 
-After cloning an existing project:
+### Production-like Testing
+
+```bash
+# Multi-worker with load balancer
+mik run --workers 4 --lb
+
+# Or run as background instance
+mik run --detach --name prod
+mik ps                    # Check status
+mik logs prod -f          # Follow logs
+mik stop prod             # Stop when done
+```
+
+### After Cloning
 
 ```bash
 git clone https://github.com/user/my-api.git
 cd my-api
 mik sync        # Download all dependencies
 mik build -rc
-mik run
+mik dev         # Start development
 ```
