@@ -1,153 +1,299 @@
 ---
-title: Daemon Services
-description: Using mik daemon's embedded services from WASM handlers
+title: Daemon Guide
+description: Complete guide to mik daemon - instance management and embedded services
 ---
 
-The mik daemon provides embedded services that WASM handlers can access via HTTP. This eliminates the need for external sidecars during development and simple deployments.
+The mik daemon is a background process that manages WASM instances and provides embedded services (KV, SQL, Storage, Cron). It exposes a REST API for programmatic control.
 
 ## Quick Start
 
 ```bash
-# Start the daemon
-mik daemon --port 9999
+# Start the daemon (default port 9999)
+mik daemon
 
-# Start your WASM instance
+# Start a WASM instance
 mik up --name myapp --port 3000
 
-# Your WASM handler can now call:
-# http://127.0.0.1:9999/kv/...
-# http://127.0.0.1:9999/sql/...
-# http://127.0.0.1:9999/storage/...
-# etc.
+# Check running instances
+mik ps
+
+# View logs
+mik logs myapp -f
+
+# Stop the instance
+mik down myapp
 ```
 
-## Available Services
+## Authentication
 
-| Service | Endpoint | Description |
-|---------|----------|-------------|
-| KV Store | `/kv/*` | Key-value storage with TTL support |
-| SQL | `/sql/*` | Embedded SQLite database |
-| Storage | `/storage/*` | S3-like object storage |
-| Queue | `/queues/*` | Message queues and pub/sub |
-| Cron | `/cron/*` | Scheduled job management |
-| Metrics | `/metrics` | Prometheus metrics |
+API key authentication is optional. Set `MIK_API_KEY` to enable it:
+
+```bash
+# Enable authentication
+export MIK_API_KEY="your-secret-key"
+mik daemon
+
+# All requests must include the API key header
+curl -H "X-API-Key: your-secret-key" http://localhost:9999/instances
+```
+
+**Exempt endpoints** (always accessible for monitoring):
+- `GET /health`
+- `GET /metrics`
+
+---
+
+## Instance Management
+
+Manage WASM instances via REST API or CLI.
+
+### REST API
+
+```bash
+# List all instances
+GET /instances
+
+# Start a new instance
+POST /instances
+Content-Type: application/json
+{
+  "name": "myapp",
+  "port": 3000,
+  "config": "/path/to/mik.toml",
+  "auto_restart": true
+}
+
+# Get instance details
+GET /instances/{name}
+
+# Stop an instance
+DELETE /instances/{name}
+
+# Restart an instance
+POST /instances/{name}/restart
+
+# Get instance logs
+GET /instances/{name}/logs?lines=100
+```
+
+### CLI Commands
+
+```bash
+mik up [--name NAME] [--port PORT] [--watch]   # Start instance
+mik down [NAME]                                 # Stop instance
+mik ps                                          # List instances
+mik logs [NAME] [-f] [-n LINES]                # View logs
+```
+
+### Example: Start and Monitor
+
+```bash
+# Start with hot reload for development
+mik up --name dev --port 3000 --watch
+
+# Check status
+curl http://localhost:9999/instances/dev
+
+# Response:
+{
+  "name": "dev",
+  "port": 3000,
+  "status": "running",
+  "pid": 12345,
+  "uptime": "2h 15m",
+  "config": "/home/user/myapp/mik.toml"
+}
+```
+
+---
 
 ## KV Store
 
-Redis-like key-value storage backed by redb.
+Redis-like key-value storage backed by redb. Supports TTL for automatic expiration.
 
 ```bash
-# Set a value
+# Set a value (with optional TTL in seconds)
 PUT /kv/{key}
 Content-Type: application/json
-{"value": "hello", "ttl": 3600}
+{"value": "hello world", "ttl": 3600}
 
 # Get a value
 GET /kv/{key}
-# Response: {"key": "mykey", "value": "hello"}
+# Response: {"key": "mykey", "value": "hello world"}
 
 # Delete a key
 DELETE /kv/{key}
 
-# List keys
+# List keys (with optional prefix filter)
 GET /kv?prefix=user:
+# Response: {"keys": ["user:1", "user:2", "user:3"]}
 ```
 
-### From WASM (Rust)
+### Example: Session Storage
 
-```rust
-use mik_sdk::http_client;
+```bash
+# Store session with 1 hour TTL
+curl -X PUT http://localhost:9999/kv/session:abc123 \
+  -H "Content-Type: application/json" \
+  -d '{"value": "{\"user_id\": 42, \"role\": \"admin\"}", "ttl": 3600}'
 
-// Set value
-let body = r#"{"value": "hello", "ttl": 3600}"#;
-http_client::put("http://127.0.0.1:9999/kv/mykey", body.as_bytes());
+# Retrieve session
+curl http://localhost:9999/kv/session:abc123
 
-// Get value
-let response = http_client::get("http://127.0.0.1:9999/kv/mykey");
+# List all sessions
+curl "http://localhost:9999/kv?prefix=session:"
 ```
+
+---
 
 ## SQL Database
 
-Embedded SQLite database for relational data.
+Embedded SQLite database with full SQL support. Foreign keys are enabled by default.
 
 ```bash
 # Execute DDL/DML (CREATE, INSERT, UPDATE, DELETE)
 POST /sql/execute
 Content-Type: application/json
-{"sql": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)"}
+{"sql": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"}
 
-# Query data
+# Query data (SELECT)
 POST /sql/query
 Content-Type: application/json
 {"sql": "SELECT * FROM users WHERE id = ?", "params": [1]}
 
-# Batch operations
+# Response:
+{
+  "columns": ["id", "name"],
+  "rows": [{"id": 1, "name": "Alice"}],
+  "rows_affected": 0
+}
+```
+
+### Batch Operations (Atomic)
+
+Batch executes multiple statements in a **single transaction**. If any statement fails, **all changes are rolled back**.
+
+```bash
 POST /sql/batch
 Content-Type: application/json
-{"statements": [
-  {"sql": "INSERT INTO users (name) VALUES (?)", "params": ["Alice"]},
-  {"sql": "INSERT INTO users (name) VALUES (?)", "params": ["Bob"]}
-]}
+{
+  "statements": [
+    {"sql": "INSERT INTO users (name) VALUES (?)", "params": ["Alice"]},
+    {"sql": "INSERT INTO users (name) VALUES (?)", "params": ["Bob"]},
+    {"sql": "UPDATE users SET name = ? WHERE id = ?", "params": ["Charlie", 1]}
+  ]
+}
+
+# Response:
+{
+  "results": [
+    {"rows_affected": 1},
+    {"rows_affected": 1},
+    {"rows_affected": 1}
+  ],
+  "total_affected": 3
+}
 ```
+
+### Example: Create Schema
+
+```bash
+# Create tables
+curl -X POST http://localhost:9999/sql/execute \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, title TEXT, user_id INTEGER REFERENCES users(id))"}'
+
+# Insert with foreign key
+curl -X POST http://localhost:9999/sql/execute \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "INSERT INTO posts (title, user_id) VALUES (?, ?)", "params": ["Hello World", 1]}'
+
+# Query with join
+curl -X POST http://localhost:9999/sql/query \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT p.title, u.name FROM posts p JOIN users u ON p.user_id = u.id"}'
+```
+
+---
 
 ## Object Storage
 
-S3-like storage backed by the filesystem.
+S3-like object storage backed by the filesystem. Supports any file type with automatic content-type detection.
 
 ```bash
-# Upload file
+# Upload a file
 PUT /storage/{path}
 Content-Type: application/octet-stream
 <binary data>
 
-# Download file
+# Download a file
 GET /storage/{path}
 
-# Delete file
+# Delete a file
 DELETE /storage/{path}
 
-# Get metadata
+# Get metadata (size, content-type, timestamps)
 HEAD /storage/{path}
 
-# List objects
+# List objects (with optional prefix)
 GET /storage?prefix=images/
 ```
 
-## Message Queues
-
-In-memory message queues with persistence.
+### Example: File Upload
 
 ```bash
-# Push message
-POST /queues/{name}/push
-Content-Type: application/json
-{"payload": {"task": "process", "id": 123}}
+# Upload an image
+curl -X PUT http://localhost:9999/storage/images/logo.png \
+  -H "Content-Type: image/png" \
+  --data-binary @logo.png
 
-# Pop message
-POST /queues/{name}/pop
-# Response: {"message": {"id": "...", "payload": {...}}}
+# Get metadata
+curl -I http://localhost:9999/storage/images/logo.png
+# Headers: Content-Type, Content-Length, Last-Modified, ETag
 
-# Peek without removing
-GET /queues/{name}/peek
+# List all images
+curl "http://localhost:9999/storage?prefix=images/"
+# Response: {"objects": [{"path": "images/logo.png", "size": 12345, ...}]}
 
-# Get queue info
-GET /queues/{name}
-
-# Publish to topic (pub/sub)
-POST /topics/{name}/publish
-{"payload": {"event": "user.created"}}
+# Download
+curl http://localhost:9999/storage/images/logo.png -o downloaded.png
 ```
+
+---
 
 ## Cron Scheduler
 
-Schedule WASM jobs with cron expressions.
+Schedule recurring jobs using cron expressions. Jobs call WASM module endpoints via HTTP.
+
+### Endpoints
 
 ```bash
 # List all jobs
 GET /cron
 
+# Create a new job
+POST /cron
+Content-Type: application/json
+{
+  "name": "cleanup",
+  "cron": "0 0 * * * * *",
+  "module": "cleanup.wasm",
+  "method": "POST",
+  "path": "/run",
+  "port": 3000,
+  "enabled": true
+}
+
 # Get job details
 GET /cron/{name}
+
+# Update job (pause/resume)
+PATCH /cron/{name}
+Content-Type: application/json
+{"enabled": false}
+
+# Delete a job
+DELETE /cron/{name}
 
 # Manually trigger a job
 POST /cron/{name}/trigger
@@ -161,99 +307,153 @@ GET /cron/{name}/history
 Uses 7-field format: `sec min hour day month weekday year`
 
 ```
-0 0 0 * * * *     # Daily at midnight
-0 */5 * * * * *   # Every 5 minutes
-0 0 12 * * MON *  # Every Monday at noon
+0 0 0 * * * *      # Daily at midnight
+0 */5 * * * * *    # Every 5 minutes
+0 0 12 * * MON *   # Every Monday at noon
+0 30 9 1 * * *     # 9:30 AM on the 1st of each month
 ```
+
+### Example: Create a Cleanup Job
+
+```bash
+# Create job that runs every hour
+curl -X POST http://localhost:9999/cron \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "hourly-cleanup",
+    "cron": "0 0 * * * * *",
+    "module": "cleanup.wasm",
+    "method": "POST",
+    "path": "/cleanup",
+    "port": 3000,
+    "enabled": true
+  }'
+
+# Pause the job
+curl -X PATCH http://localhost:9999/cron/hourly-cleanup \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+
+# Trigger manually for testing
+curl -X POST http://localhost:9999/cron/hourly-cleanup/trigger
+
+# Check execution history
+curl http://localhost:9999/cron/hourly-cleanup/history
+# Response:
+{
+  "job_name": "hourly-cleanup",
+  "executions": [
+    {
+      "id": "abc-123",
+      "started_at": "2025-01-15T10:00:00Z",
+      "completed_at": "2025-01-15T10:00:01Z",
+      "duration_ms": 1250,
+      "success": true,
+      "manual": true
+    }
+  ]
+}
+```
+
+### Jobs from mik.toml
+
+Jobs defined in `mik.toml` are automatically registered when an instance starts:
+
+```toml
+[[schedules]]
+name = "daily-report"
+cron = "0 0 8 * * * *"
+module = "reports.wasm"
+method = "POST"
+path = "/generate"
+```
+
+---
 
 ## Prometheus Metrics
 
 ```bash
 GET /metrics
-# Response: Prometheus text format
-
-# Metrics include:
-# mik_http_requests_total
-# mik_http_request_duration_seconds
-# mik_kv_operations_total
-# mik_sql_queries_total
-# mik_storage_operations_total
-# mik_queue_operations_total
-# mik_cron_executions_total
 ```
 
-## CLI Commands
+Available metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `mik_http_requests_total` | Total HTTP requests by path and status |
+| `mik_http_request_duration_seconds` | Request latency histogram |
+| `mik_instance_count` | Running/stopped/crashed instances |
+| `mik_instance_uptime_seconds` | Instance uptime |
+| `mik_kv_operations_total` | KV operations by type |
+| `mik_sql_queries_total` | SQL queries by type |
+| `mik_storage_operations_total` | Storage operations by type |
+| `mik_cron_executions_total` | Cron job executions |
+| `mik_cron_execution_duration_seconds` | Cron job duration |
+
+---
+
+## System Endpoints
 
 ```bash
-# Daemon management
-mik daemon [--port 9999]   # Start daemon
-mik ps                     # List instances
-mik logs [name] [-f]       # View logs
+# Health check (always returns 200 if daemon is running)
+GET /health
+# Response: {"status": "healthy", "uptime": "running"}
 
-# Instance lifecycle
-mik up [--name] [--port]   # Start instance
-mik down [name]            # Stop instance
+# Version info
+GET /version
+# Response: {"version": "0.1.0", "build": "release"}
 ```
 
-## Example: Full Integration Test
-
-See `examples/daemon-test/` for a complete WASM handler that tests all daemon services:
-
-```rust
-use mik_sdk::http_client;
-
-// Test KV
-let body = r#"{"value": "test", "ttl": 3600}"#;
-http_client::put("http://127.0.0.1:9999/kv/test-key", body.as_bytes());
-let response = http_client::get("http://127.0.0.1:9999/kv/test-key");
-
-// Test SQL
-let sql = r#"{"sql": "SELECT 1 as num"}"#;
-http_client::post("http://127.0.0.1:9999/sql/query", sql.as_bytes());
-
-// Test Storage
-http_client::put("http://127.0.0.1:9999/storage/test.txt", b"hello");
-http_client::get("http://127.0.0.1:9999/storage/test.txt");
-
-// Test Queue
-let msg = r#"{"payload": {"test": true}}"#;
-http_client::post("http://127.0.0.1:9999/queues/test/push", msg.as_bytes());
-http_client::post("http://127.0.0.1:9999/queues/test/pop", &[]);
-```
+---
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Handler["Your WASM Handler (port 3000)"]
-        App[Application Logic]
+    subgraph CLI["CLI Commands"]
+        Up[mik up]
+        Down[mik down]
+        Ps[mik ps]
+        Logs[mik logs]
     end
 
     subgraph Daemon["mik daemon (port 9999)"]
-        KV["/kv/*<br/>redb key-value"]
-        SQL["/sql/*<br/>SQLite database"]
-        Storage["/storage/*<br/>Filesystem objects"]
-        Queues["/queues/*<br/>In-memory + redb"]
-        Cron["/cron/*<br/>tokio-cron-scheduler"]
-        Metrics["/metrics<br/>Prometheus"]
+        API[REST API]
+        Instances[Instance Manager]
+        KV[KV Store<br/>redb]
+        SQL[SQL Service<br/>SQLite]
+        Storage[Storage<br/>Filesystem]
+        Cron[Cron Scheduler]
+        Metrics[Prometheus]
     end
 
-    App -->|HTTP| KV
-    App -->|HTTP| SQL
-    App -->|HTTP| Storage
-    App -->|HTTP| Queues
-    App -->|HTTP| Cron
+    subgraph Apps["WASM Instances"]
+        App1[myapp:3000]
+        App2[api:3001]
+    end
+
+    CLI --> API
+    API --> Instances
+    API --> KV
+    API --> SQL
+    API --> Storage
+    API --> Cron
+    API --> Metrics
+    Instances --> Apps
+    Cron -->|HTTP| Apps
 ```
+
+---
 
 ## When to Use
 
-**Use embedded daemon services for:**
+**Use the daemon for:**
 - Local development
-- Simple deployments
-- Single-node applications
-- Prototyping
+- Simple single-node deployments
+- Prototyping and testing
+- When you need an all-in-one solution
 
-**Use external sidecars (mikcar) for:**
+**Use external services (mikcar) for:**
 - Production at scale
 - Multi-node deployments
 - When you need Redis/Postgres/S3 specifically

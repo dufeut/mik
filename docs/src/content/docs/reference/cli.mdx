@@ -262,9 +262,11 @@ The daemon exposes:
 - KV store: `/kv/*`
 - SQL database: `/sql/*`
 - Object storage: `/storage/*`
-- Message queues: `/queues/*`
 - Cron scheduler: `/cron/*`
 - Prometheus metrics: `/metrics`
+- Health check: `/health`
+
+**Authentication:** Set `MIK_API_KEY` environment variable to require API key authentication.
 
 ---
 
@@ -337,6 +339,7 @@ mik logs [NAME] [OPTIONS]
 | `HOST` | Bind address (default: 127.0.0.1) |
 | `RUST_LOG` | Log level (error, warn, info, debug, trace) |
 | `MIK_HOT_RELOAD` | Enable hot reload mode |
+| `MIK_API_KEY` | API key for daemon authentication (optional) |
 
 ---
 

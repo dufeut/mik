@@ -3,7 +3,7 @@ title: Sidecar Communication
 description: How handlers communicate with infrastructure via sidecars
 ---
 
-Handlers access external infrastructure (databases, caches, queues) through HTTP calls to sidecar services. This keeps credentials out of WASM modules and enables policy enforcement.
+Handlers access external infrastructure (databases, caches, storage) through HTTP calls to sidecar services. This keeps credentials out of WASM modules and enables policy enforcement.
 
 ## Architecture
 
@@ -33,13 +33,13 @@ Sidecars are native processes that:
 [sidecars]
 db = "unix:///var/run/sidecars/db.sock"
 cache = "unix:///var/run/sidecars/cache.sock"
-queue = "unix:///var/run/sidecars/queue.sock"
+storage = "unix:///var/run/sidecars/storage.sock"
 
 # Kubernetes/remote - use TCP
 [sidecars]
 db = "http://db-sidecar:8080"
 cache = "http://cache-sidecar:8080"
-queue = "http://queue-sidecar:8080"
+storage = "http://storage-sidecar:8080"
 ```
 
 ## Calling Sidecars from Handlers
