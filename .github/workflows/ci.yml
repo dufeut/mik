@@ -5,16 +5,28 @@ on:
     branches: [main]
     paths-ignore:
       - "*.md"
+      - "*.sh"
       - "docs/**"
       - "LICENSE"
       - ".gitignore"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/bench.yml"
+      - ".github/workflows/fuzz.yml"
+      - ".github/workflows/release.yml"
+      - "CHANGELOG.md"
   pull_request:
     branches: [main]
     paths-ignore:
       - "*.md"
+      - "*.sh"
       - "docs/**"
       - "LICENSE"
       - ".gitignore"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/bench.yml"
+      - ".github/workflows/fuzz.yml"
+      - ".github/workflows/release.yml"
+      - "CHANGELOG.md"
 
 env:
   CARGO_TERM_COLOR: always
