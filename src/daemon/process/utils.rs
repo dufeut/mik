@@ -3,16 +3,16 @@
 //! This module contains shared utility functions used across
 //! the process management subsystem.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::PathBuf;
 
 /// Gets the log directory path for mik instances.
 ///
 /// Returns `~/.mik/logs` on all platforms.
+///
+/// This delegates to [`super::super::paths::get_logs_dir`].
 pub fn get_log_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Failed to get home directory")?;
-
-    Ok(home.join(".mik").join("logs"))
+    crate::daemon::paths::get_logs_dir()
 }
 
 #[cfg(test)]

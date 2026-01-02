@@ -39,9 +39,8 @@ mod redb;
 mod store;
 mod types;
 
-// TODO: Re-enable property tests after converting to async-compatible format
-// #[cfg(test)]
-// mod property_tests;
+#[cfg(test)]
+mod property_tests;
 #[cfg(test)]
 mod tests;
 

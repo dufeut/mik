@@ -325,8 +325,7 @@ pub async fn stats() -> Result<()> {
 ///
 /// Shows recent log lines or follows in real-time.
 pub async fn logs(name: &str, follow: bool, lines: usize) -> Result<()> {
-    let home = dirs::home_dir().context("Failed to get home directory")?;
-    let log_path = home.join(".mik").join("logs").join(format!("{name}.log"));
+    let log_path = crate::daemon::paths::get_log_path(name)?;
 
     if !log_path.exists() {
         println!("No logs found for instance '{name}'");

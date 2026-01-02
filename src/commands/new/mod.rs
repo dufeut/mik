@@ -19,8 +19,8 @@ pub use templates::{Language, Template};
 
 /// OCI reference for the WIT package.
 const WIT_OCI_REF: &str = "ghcr.io/dufeut/mik-sdk-wit";
-/// Default location for cached WIT in user's home directory.
-const WIT_CACHE_PATH: &str = ".mik/tools/wit/core.wit";
+/// WIT cache filename within the tools directory.
+const WIT_CACHE_FILENAME: &str = "wit/core.wit";
 
 /// Options for creating a new project.
 #[derive(Debug, Clone)]
@@ -117,6 +117,11 @@ pub async fn execute(options: NewOptions) -> Result<()> {
     Ok(())
 }
 
+/// Get the WIT cache path: `~/.mik/tools/wit/core.wit`
+fn get_wit_cache_path() -> Result<std::path::PathBuf> {
+    Ok(crate::daemon::paths::get_tools_dir()?.join(WIT_CACHE_FILENAME))
+}
+
 /// Fetch WIT content from OCI registry or cache.
 ///
 /// Discovery order:
@@ -124,11 +129,10 @@ pub async fn execute(options: NewOptions) -> Result<()> {
 /// 2. Download from OCI registry and cache
 async fn fetch_wit() -> Result<String> {
     // Check cached version first
-    if let Some(home) = dirs::home_dir() {
-        let cache_path = home.join(WIT_CACHE_PATH);
-        if cache_path.exists() {
-            return fs::read_to_string(&cache_path).context("Failed to read cached WIT");
-        }
+    if let Ok(cache_path) = get_wit_cache_path()
+        && cache_path.exists()
+    {
+        return fs::read_to_string(&cache_path).context("Failed to read cached WIT");
     }
 
     // Download from OCI (only when registry feature is enabled)
@@ -138,8 +142,7 @@ async fn fetch_wit() -> Result<String> {
         let wit_content = download_wit().await?;
 
         // Cache for future use
-        if let Some(home) = dirs::home_dir() {
-            let cache_path = home.join(WIT_CACHE_PATH);
+        if let Ok(cache_path) = get_wit_cache_path() {
             if let Some(parent) = cache_path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
@@ -162,14 +165,12 @@ async fn fetch_wit() -> Result<String> {
 /// Download WIT from OCI registry.
 #[cfg(feature = "registry")]
 async fn download_wit() -> Result<String> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let temp_path = home.join(".mik/tools/wit/temp.wit");
+    let tools_dir = crate::daemon::paths::get_tools_dir()?;
+    let wit_dir = tools_dir.join("wit");
+    let temp_path = wit_dir.join("temp.wit");
 
     // Create directory if needed
-    if let Some(parent) = temp_path.parent() {
-        fs::create_dir_all(parent).context("Failed to create WIT cache directory")?;
-    }
+    fs::create_dir_all(&wit_dir).context("Failed to create WIT cache directory")?;
 
     // Use pull_oci to download
     super::pull::pull_oci(WIT_OCI_REF, &temp_path)
@@ -180,7 +181,7 @@ async fn download_wit() -> Result<String> {
     let content = fs::read_to_string(&temp_path).context("Failed to read downloaded WIT")?;
 
     // Move to final location
-    let final_path = home.join(WIT_CACHE_PATH);
+    let final_path = get_wit_cache_path()?;
     fs::rename(&temp_path, &final_path)
         .or_else(|_| fs::copy(&temp_path, &final_path).map(|_| ()))
         .context("Failed to cache WIT")?;

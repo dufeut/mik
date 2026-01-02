@@ -92,8 +92,10 @@ pub fn sanitize_file_path(path: &str) -> Result<PathBuf, PathTraversalError> {
     for component in path_obj.components() {
         match component {
             Component::Normal(part) => {
+                let part_str = part.to_string_lossy();
+
                 // Check for null bytes in path components
-                if part.to_string_lossy().contains('\0') {
+                if part_str.contains('\0') {
                     warn!(
                         security_event = "path_traversal_attempt",
                         path = %path,
@@ -102,6 +104,20 @@ pub fn sanitize_file_path(path: &str) -> Result<PathBuf, PathTraversalError> {
                     );
                     return Err(PathTraversalError::NullByte);
                 }
+
+                // Defense in depth: reject components starting with ".."
+                // This catches obfuscation attempts like "..¡" that bypass Component::ParentDir
+                if part_str.starts_with("..") {
+                    warn!(
+                        security_event = "path_traversal_attempt",
+                        path = %path,
+                        component = %part_str,
+                        reason = "suspicious_dotdot_prefix",
+                        "Blocked path component starting with '..'"
+                    );
+                    return Err(PathTraversalError::EscapesBaseDirectory);
+                }
+
                 normalized.push(part);
             },
             Component::CurDir => {

@@ -93,11 +93,17 @@ pub fn format_duration(duration: chrono::Duration) -> String {
 
 // =============================================================================
 // Project Configuration Helpers
+//
+// These utilities are prepared for future integrations (e.g., Tauri desktop app,
+// workspace management, multi-project tooling). They're marked dead_code until
+// their consuming features are built.
 // =============================================================================
 
 /// Get the mik.toml config path in the current directory.
 ///
 /// Returns the path to `mik.toml` in the current working directory.
+///
+/// Useful for GUI integrations (Tauri) to load project configuration.
 #[allow(dead_code)]
 pub fn get_config_path() -> Result<PathBuf> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
@@ -105,6 +111,8 @@ pub fn get_config_path() -> Result<PathBuf> {
 }
 
 /// Get the working directory (current directory).
+///
+/// Useful for workspace management in GUI applications.
 #[allow(dead_code)]
 pub fn get_working_dir() -> Result<PathBuf> {
     std::env::current_dir().context("Failed to get current directory")
@@ -113,6 +121,8 @@ pub fn get_working_dir() -> Result<PathBuf> {
 /// Require mik.toml to exist in the current directory.
 ///
 /// Returns the path to mik.toml if it exists, otherwise returns an error.
+///
+/// Useful for validating project context before operations in GUI/CLI.
 #[allow(dead_code)]
 pub fn require_mik_toml() -> Result<PathBuf> {
     let config_path = get_config_path()?;
@@ -124,7 +134,7 @@ pub fn require_mik_toml() -> Result<PathBuf> {
 
 /// Extract filename from a path, with optional suffix stripping.
 ///
-/// Useful for extracting component/module names from paths.
+/// Useful for extracting component/module names from paths for display in UI.
 ///
 /// # Example
 ///

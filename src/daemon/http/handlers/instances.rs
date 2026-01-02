@@ -392,10 +392,8 @@ pub(crate) async fn get_logs(
     Path(name): Path<String>,
     Query(query): Query<LogsQuery>,
 ) -> Result<Json<LogsResponse>, AppError> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| AppError::Internal("Failed to get home directory".to_string()))?;
-
-    let log_path = home.join(".mik").join("logs").join(format!("{name}.log"));
+    let log_path =
+        crate::daemon::paths::get_log_path(&name).map_err(|e| AppError::Internal(e.to_string()))?;
 
     if !log_path.exists() {
         return Ok(Json(LogsResponse {

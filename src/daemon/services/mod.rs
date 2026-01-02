@@ -73,10 +73,9 @@ pub use storage::{
     FilesystemBackend, MemoryStorageBackend, ObjectMeta, StorageBackend, StorageService,
 };
 
-/// Get the base directory for mik data (~/.mik).
+/// Get the base directory for mik data (~/.mik), creating if needed.
 pub fn get_data_dir() -> anyhow::Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Failed to get home directory"))?;
-    let data_dir = home.join(".mik");
+    let data_dir = super::paths::get_mik_dir()?;
     std::fs::create_dir_all(&data_dir)?;
     Ok(data_dir)
 }

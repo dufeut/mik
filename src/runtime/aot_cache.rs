@@ -62,11 +62,7 @@ impl AotCache {
     ///
     /// Creates the cache directory structure if it doesn't exist.
     pub fn new(config: AotCacheConfig) -> Result<Self> {
-        let home = dirs::home_dir().context("Failed to get home directory")?;
-
-        let cache_dir = home
-            .join(".mik")
-            .join("cache")
+        let cache_dir = crate::daemon::paths::get_cache_dir()?
             .join("aot")
             .join(CACHE_VERSION)
             .join(WASMTIME_VERSION);

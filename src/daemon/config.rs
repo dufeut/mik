@@ -119,8 +119,7 @@ impl DaemonConfig {
 
     /// Get the path to the daemon configuration file.
     pub fn config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().context("Failed to get home directory")?;
-        Ok(home.join(".mik").join("daemon.toml"))
+        super::paths::get_daemon_config_path()
     }
 }
 

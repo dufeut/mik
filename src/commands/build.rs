@@ -297,11 +297,7 @@ fn package_to_dist(wasm_path: &Path, name: &str, release: bool, composed: bool) 
     let tar_size = fs::metadata(&dist_tar).map(|m| m.len()).unwrap_or(0);
 
     // Print summary
-    println!();
-    println!("{}", "=".repeat(50));
-    println!("Build Summary");
-    println!("{}", "=".repeat(50));
-    println!();
+    ui::print_summary_header("Build Summary");
     println!("Output:     dist/{wasm_name}");
     println!("Package:    dist/{tar_name}");
     println!();
@@ -313,14 +309,11 @@ fn package_to_dist(wasm_path: &Path, name: &str, release: bool, composed: bool) 
         format_bytes(tar_size),
         ratio
     );
-    println!();
-    println!("{}", "=".repeat(50));
+    ui::print_summary_footer();
 
     Ok(())
 }
 
-/// Default location for tools (bridge, etc) in user's home directory.
-const DEFAULT_TOOLS_DIR: &str = ".mik/tools";
 /// OCI reference for the bridge component.
 const BRIDGE_OCI_REF: &str = "ghcr.io/dufeut/mik-sdk-bridge";
 
@@ -378,9 +371,7 @@ async fn compose_http_handler(
     spinner.finish_and_clear();
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("\nBridge composition failed:");
-        eprintln!("{stderr}");
+        ui::print_error_box_from_output("Bridge composition failed", &output);
         eprintln!("\nThis usually means the handler doesn't export mik:core/handler@0.2.0");
         eprintln!(
             "Verify with: wasm-tools component wit {}",
@@ -429,8 +420,8 @@ async fn find_bridge(configured_path: Option<&str>) -> Result<PathBuf> {
     }
 
     // 3. Check ~/.mik/tools/bridge/latest.wasm
-    if let Some(home) = dirs::home_dir() {
-        let tools_path = home.join(DEFAULT_TOOLS_DIR).join("bridge/latest.wasm");
+    if let Ok(tools_dir) = crate::daemon::paths::get_tools_dir() {
+        let tools_path = tools_dir.join("bridge/latest.wasm");
         if tools_path.exists() {
             return Ok(tools_path);
         }
@@ -459,9 +450,7 @@ async fn find_bridge(configured_path: Option<&str>) -> Result<PathBuf> {
 /// Downloads to `~/.mik/tools/bridge/latest.wasm`.
 #[cfg(feature = "registry")]
 async fn download_bridge() -> Result<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let tools_dir = home.join(DEFAULT_TOOLS_DIR).join("bridge");
+    let tools_dir = crate::daemon::paths::get_tools_dir()?.join("bridge");
     let output_path = tools_dir.join("latest.wasm");
 
     // Create directory if needed
@@ -478,26 +467,18 @@ async fn download_bridge() -> Result<PathBuf> {
         },
         Err(e) => {
             spinner.finish_and_clear();
-            eprintln!("\n{}", "=".repeat(60));
-            eprintln!("Failed to download bridge from registry");
-            eprintln!("{}", "=".repeat(60));
-            eprintln!();
-            eprintln!("Error: {e}");
-            eprintln!();
-            eprintln!("The bridge component could not be downloaded from:");
-            eprintln!("  {BRIDGE_OCI_REF}");
-            eprintln!();
-            eprintln!("Options:");
-            eprintln!("  1. Check your network connection");
-            eprintln!("  2. Specify a local path in mik.toml:");
-            eprintln!("     [composition]");
-            eprintln!("     bridge = \"path/to/bridge.wasm\"");
-            eprintln!();
-            eprintln!("  3. Place bridge.wasm in modules/ directory");
-            eprintln!();
-            eprintln!("  4. Build from mik-sdk:");
-            eprintln!("     cd mik-sdk/mik-bridge && cargo component build --release");
-            eprintln!("{}", "=".repeat(60));
+            ui::print_error_section(
+                "Failed to download bridge from registry",
+                &format!(
+                    "Error: {e}\n\nThe bridge component could not be downloaded from:\n  {BRIDGE_OCI_REF}"
+                ),
+            );
+            ui::print_numbered_steps(&[
+                "Check your network connection",
+                "Specify a local path in mik.toml:\n     [composition]\n     bridge = \"path/to/bridge.wasm\"",
+                "Place bridge.wasm in modules/ directory",
+                "Build from mik-sdk:\n     cd mik-sdk/mik-bridge && cargo component build --release",
+            ]);
             anyhow::bail!("Failed to download bridge: {e}")
         },
     }

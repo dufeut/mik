@@ -36,7 +36,7 @@ impl Language {
     pub const fn available_templates(&self) -> &[Template] {
         match self {
             Self::Rust => &[Template::Basic, Template::RestApi],
-            Self::TypeScript => &[Template::Basic],
+            Self::TypeScript => &[Template::Basic, Template::RestApi],
         }
     }
 }
@@ -196,15 +196,6 @@ fn generate_typescript_project(
     ctx: &TemplateContext,
     wit_content: &str,
 ) -> Result<()> {
-    // Currently only Basic template is supported for TypeScript
-    // This match ensures consistency with generate_rust_project signature
-    // and allows for future template expansion
-    let _ = match template {
-        Template::Basic => template,
-        // RestApi and other templates not yet implemented for TypeScript
-        _ => Template::Basic,
-    };
-
     // Create directories
     create_common_dirs(dir)?;
 
@@ -219,8 +210,12 @@ fn generate_typescript_project(
     // tsconfig.json
     fs::write(dir.join("tsconfig.json"), TS_TSCONFIG).context("failed to write tsconfig.json")?;
 
-    // src/component.ts
-    let component_ts = ctx.render(TS_COMPONENT);
+    // src/component.ts - select based on template
+    let component_content = match template {
+        Template::Basic => TS_COMPONENT,
+        Template::RestApi => TS_RESTAPI_COMPONENT,
+    };
+    let component_ts = ctx.render(component_content);
     fs::write(dir.join("src/component.ts"), &component_ts)
         .context("failed to write src/component.ts")?;
 
@@ -230,8 +225,12 @@ fn generate_typescript_project(
     fs::write(dir.join("wit/deps/core/core.wit"), wit_content)
         .context("failed to write wit/deps/core/core.wit")?;
 
-    // README.md
-    let readme = ctx.render(TS_README);
+    // README.md - select based on template
+    let readme_content = match template {
+        Template::Basic => TS_README,
+        Template::RestApi => TS_RESTAPI_README,
+    };
+    let readme = ctx.render(readme_content);
     fs::write(dir.join("README.md"), &readme).context("failed to write README.md")?;
 
     // .gitignore
@@ -575,6 +574,293 @@ const TS_GITIGNORE_EXTRA: &str = r"node_modules/
 dist/
 ";
 
+// --- TypeScript RestApi ---
+const TS_RESTAPI_COMPONENT: &str = r#"// {{PROJECT_NAME}} - A REST API built with mik (TypeScript)
+//
+// Demonstrates: CRUD operations, routing, JSON handling
+// Uses the simple mik:core/handler interface.
+
+import { RequestData, Response, Method } from "mik:core/handler@0.1.0";
+
+// ---- Types ----
+
+interface Item {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+interface ItemInput {
+  name: string;
+  description?: string;
+}
+
+interface ListQuery {
+  page?: number;
+  limit?: number;
+}
+
+// ---- In-memory storage (for demo) ----
+const items: Map<string, Item> = new Map();
+
+// ---- Helpers ----
+
+function methodToString(method: Method): string {
+  const methods: Record<string, string> = {
+    get: "GET",
+    post: "POST",
+    put: "PUT",
+    patch: "PATCH",
+    delete: "DELETE",
+    head: "HEAD",
+    options: "OPTIONS",
+  };
+  return methods[method] ?? "UNKNOWN";
+}
+
+function json(status: number, body: unknown): Response {
+  return {
+    status,
+    headers: [["content-type", "application/json"]],
+    body: new TextEncoder().encode(JSON.stringify(body)),
+  };
+}
+
+function parseJson<T>(body: Uint8Array): T | null {
+  try {
+    return JSON.parse(new TextDecoder().decode(body)) as T;
+  } catch {
+    return null;
+  }
+}
+
+function parseQuery(path: string): ListQuery {
+  const query: ListQuery = { page: 1, limit: 10 };
+  const queryStart = path.indexOf("?");
+  if (queryStart >= 0) {
+    const params = new URLSearchParams(path.slice(queryStart + 1));
+    if (params.has("page")) query.page = parseInt(params.get("page")!, 10) || 1;
+    if (params.has("limit")) query.limit = parseInt(params.get("limit")!, 10) || 10;
+  }
+  return query;
+}
+
+function generateId(): string {
+  return Math.random().toString(36).substring(2, 15);
+}
+
+// ---- Route matching ----
+
+function matchRoute(method: string, path: string): { handler: string; params: Record<string, string> } | null {
+  const cleanPath = path.split("?")[0];
+
+  // GET /health
+  if (method === "GET" && cleanPath === "/health") {
+    return { handler: "health", params: {} };
+  }
+
+  // GET /items
+  if (method === "GET" && cleanPath === "/items") {
+    return { handler: "listItems", params: {} };
+  }
+
+  // POST /items
+  if (method === "POST" && cleanPath === "/items") {
+    return { handler: "createItem", params: {} };
+  }
+
+  // GET/PUT/DELETE /items/:id
+  const itemMatch = cleanPath.match(/^\/items\/([^/]+)$/);
+  if (itemMatch) {
+    const id = itemMatch[1];
+    if (method === "GET") return { handler: "getItem", params: { id } };
+    if (method === "PUT") return { handler: "updateItem", params: { id } };
+    if (method === "DELETE") return { handler: "deleteItem", params: { id } };
+  }
+
+  return null;
+}
+
+// ---- Handlers ----
+
+function health(): Response {
+  return json(200, { status: "healthy" });
+}
+
+function listItems(req: RequestData): Response {
+  const query = parseQuery(req.path);
+  const allItems = Array.from(items.values());
+  const start = ((query.page ?? 1) - 1) * (query.limit ?? 10);
+  const pageItems = allItems.slice(start, start + (query.limit ?? 10));
+
+  return json(200, {
+    items: pageItems,
+    page: query.page,
+    limit: query.limit,
+    total: allItems.length,
+  });
+}
+
+function getItem(id: string): Response {
+  const item = items.get(id);
+  if (!item) {
+    return json(404, { error: "Item not found" });
+  }
+  return json(200, item);
+}
+
+function createItem(req: RequestData): Response {
+  const input = parseJson<ItemInput>(req.body);
+  if (!input || !input.name) {
+    return json(400, { error: "Invalid input: name is required" });
+  }
+
+  const id = generateId();
+  const item: Item = {
+    id,
+    name: input.name,
+    description: input.description,
+  };
+  items.set(id, item);
+
+  return {
+    status: 201,
+    headers: [
+      ["content-type", "application/json"],
+      ["location", `/items/${id}`],
+    ],
+    body: new TextEncoder().encode(JSON.stringify(item)),
+  };
+}
+
+function updateItem(id: string, req: RequestData): Response {
+  if (!items.has(id)) {
+    return json(404, { error: "Item not found" });
+  }
+
+  const input = parseJson<ItemInput>(req.body);
+  if (!input || !input.name) {
+    return json(400, { error: "Invalid input: name is required" });
+  }
+
+  const item: Item = {
+    id,
+    name: input.name,
+    description: input.description,
+  };
+  items.set(id, item);
+
+  return json(200, item);
+}
+
+function deleteItem(id: string): Response {
+  if (!items.has(id)) {
+    return json(404, { error: "Item not found" });
+  }
+  items.delete(id);
+  return { status: 204, headers: [], body: new Uint8Array() };
+}
+
+// ---- Export handler ----
+
+export const handler = {
+  handle(req: RequestData): Response {
+    const method = methodToString(req.method);
+    const route = matchRoute(method, req.path);
+
+    if (!route) {
+      return json(404, { error: "Not found" });
+    }
+
+    switch (route.handler) {
+      case "health":
+        return health();
+      case "listItems":
+        return listItems(req);
+      case "getItem":
+        return getItem(route.params.id);
+      case "createItem":
+        return createItem(req);
+      case "updateItem":
+        return updateItem(route.params.id, req);
+      case "deleteItem":
+        return deleteItem(route.params.id);
+      default:
+        return json(500, { error: "Internal error" });
+    }
+  },
+};
+"#;
+
+const TS_RESTAPI_README: &str = r#"# {{PROJECT_NAME}}
+
+A REST API built with mik using TypeScript.
+
+## Prerequisites
+
+- Node.js 18+
+- npm
+
+## Build
+
+```bash
+mik build
+```
+
+Or manually:
+```bash
+npm install
+npm run build
+```
+
+## Run
+
+```bash
+mik run
+```
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /health | Health check |
+| GET | /items | List items (supports ?page=&limit=) |
+| GET | /items/:id | Get item by ID |
+| POST | /items | Create item |
+| PUT | /items/:id | Update item |
+| DELETE | /items/:id | Delete item |
+
+## Example Usage
+
+```bash
+# Health check
+curl http://localhost:3000/run/{{PROJECT_NAME}}/health
+
+# Create item
+curl -X POST http://localhost:3000/run/{{PROJECT_NAME}}/items \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "Test", "description": "A test item"}'
+
+# List items
+curl http://localhost:3000/run/{{PROJECT_NAME}}/items
+
+# Get item
+curl http://localhost:3000/run/{{PROJECT_NAME}}/items/<id>
+
+# Update item
+curl -X PUT http://localhost:3000/run/{{PROJECT_NAME}}/items/<id> \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "Updated", "description": "Updated item"}'
+
+# Delete item
+curl -X DELETE http://localhost:3000/run/{{PROJECT_NAME}}/items/<id>
+```
+
+## Documentation
+
+See: https://dufeut.github.io/mik/guides/building-components/
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,7 +906,7 @@ mod tests {
         );
         assert_eq!(
             Language::TypeScript.available_templates(),
-            &[Template::Basic]
+            &[Template::Basic, Template::RestApi]
         );
     }
 }

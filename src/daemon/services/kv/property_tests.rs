@@ -12,9 +12,19 @@
 //! ```
 
 use proptest::prelude::*;
+use std::time::Duration;
 use tempfile::TempDir;
 
 use super::store::KvStore;
+
+/// Helper to run async code in sync context for proptest.
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(f)
+}
 
 // ============================================================================
 // Test Strategies - Input Generation
@@ -37,11 +47,6 @@ fn binary_value() -> impl Strategy<Value = Vec<u8>> {
     prop::collection::vec(any::<u8>(), 0..1000)
 }
 
-/// Strategy for generating string values (more readable in tests).
-fn string_value() -> impl Strategy<Value = Vec<u8>> {
-    "[a-zA-Z0-9 ]{0,500}".prop_map(String::into_bytes)
-}
-
 /// Strategy for generating TTL values in seconds.
 fn ttl_seconds() -> impl Strategy<Value = u64> {
     1u64..=86400u64 // 1 second to 1 day
@@ -58,20 +63,23 @@ proptest! {
     #[test]
     fn set_get_roundtrip(key in valid_key(), value in binary_value()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set the value
-        store.set(&key, &value).unwrap();
+        block_on(async {
+            // Set the value
+            store.set(&key, &value, None).await.unwrap();
 
-        // Get it back
-        let retrieved = store.get(&key).unwrap();
+            // Get it back
+            let retrieved = store.get(&key).await.unwrap();
 
-        prop_assert!(retrieved.is_some(), "Key should exist after set");
-        prop_assert_eq!(
-            retrieved.unwrap(),
-            value,
-            "Retrieved value should match set value"
-        );
+            prop_assert!(retrieved.is_some(), "Key should exist after set");
+            prop_assert_eq!(
+                retrieved.unwrap(),
+                value,
+                "Retrieved value should match set value"
+            );
+            Ok(())
+        })?;
     }
 
     /// Invariant: Overwriting a key replaces the value.
@@ -82,83 +90,101 @@ proptest! {
         value2 in binary_value()
     ) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set first value
-        store.set(&key, &value1).unwrap();
+        block_on(async {
+            // Set first value
+            store.set(&key, &value1, None).await.unwrap();
 
-        // Overwrite with second value
-        store.set(&key, &value2).unwrap();
+            // Overwrite with second value
+            store.set(&key, &value2, None).await.unwrap();
 
-        // Should get second value
-        let retrieved = store.get(&key).unwrap();
-        prop_assert!(retrieved.is_some());
-        prop_assert_eq!(
-            retrieved.unwrap(),
-            value2,
-            "Should get the overwritten value"
-        );
+            // Should get second value
+            let retrieved = store.get(&key).await.unwrap();
+            prop_assert!(retrieved.is_some());
+            prop_assert_eq!(
+                retrieved.unwrap(),
+                value2,
+                "Should get the overwritten value"
+            );
+            Ok(())
+        })?;
     }
 
     /// Invariant: Delete removes the key completely.
     #[test]
     fn delete_removes_key(key in valid_key(), value in binary_value()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set a value
-        store.set(&key, &value).unwrap();
-        prop_assert!(store.exists(&key).unwrap());
+        block_on(async {
+            // Set a value
+            store.set(&key, &value, None).await.unwrap();
+            prop_assert!(store.exists(&key).await.unwrap());
 
-        // Delete it
-        let deleted = store.delete(&key).unwrap();
-        prop_assert!(deleted, "Delete should return true for existing key");
+            // Delete it
+            let deleted = store.delete(&key).await.unwrap();
+            prop_assert!(deleted, "Delete should return true for existing key");
 
-        // Should no longer exist
-        prop_assert!(!store.exists(&key).unwrap(), "Key should not exist after delete");
-        prop_assert!(
-            store.get(&key).unwrap().is_none(),
-            "Get should return None after delete"
-        );
+            // Should no longer exist
+            prop_assert!(!store.exists(&key).await.unwrap(), "Key should not exist after delete");
+            prop_assert!(
+                store.get(&key).await.unwrap().is_none(),
+                "Get should return None after delete"
+            );
+            Ok(())
+        })?;
     }
 
     /// Invariant: Deleting non-existent key returns false.
     #[test]
     fn delete_nonexistent_returns_false(key in valid_key()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        let deleted = store.delete(&key).unwrap();
-        prop_assert!(!deleted, "Delete should return false for non-existent key");
+        block_on(async {
+            let deleted = store.delete(&key).await.unwrap();
+            prop_assert!(!deleted, "Delete should return false for non-existent key");
+            Ok(())
+        })?;
     }
 
     /// Invariant: Get on non-existent key returns None.
     #[test]
     fn get_nonexistent_returns_none(key in valid_key()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        let result = store.get(&key).unwrap();
-        prop_assert!(result.is_none(), "Get on non-existent key should return None");
+        block_on(async {
+            let result = store.get(&key).await.unwrap();
+            prop_assert!(result.is_none(), "Get on non-existent key should return None");
+            Ok(())
+        })?;
     }
 
     /// Invariant: Exists returns false for non-existent keys.
     #[test]
     fn exists_false_for_missing(key in valid_key()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        prop_assert!(!store.exists(&key).unwrap(), "Exists should be false for missing key");
+        block_on(async {
+            prop_assert!(!store.exists(&key).await.unwrap(), "Exists should be false for missing key");
+            Ok(())
+        })?;
     }
 
     /// Invariant: Exists returns true after set.
     #[test]
     fn exists_true_after_set(key in valid_key(), value in binary_value()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        store.set(&key, &value).unwrap();
-        prop_assert!(store.exists(&key).unwrap(), "Exists should be true after set");
+        block_on(async {
+            store.set(&key, &value, None).await.unwrap();
+            prop_assert!(store.exists(&key).await.unwrap(), "Exists should be true after set");
+            Ok(())
+        })?;
     }
 }
 
@@ -173,31 +199,34 @@ proptest! {
         keys in prop::collection::hash_set(valid_key(), 1..10)
     ) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set all keys
-        for key in &keys {
-            store.set(key, b"value").unwrap();
-        }
+        block_on(async {
+            // Set all keys
+            for key in &keys {
+                store.set(key, b"value", None).await.unwrap();
+            }
 
-        // List all keys
-        let listed = store.list_keys(None).unwrap();
+            // List all keys
+            let listed = store.list_keys(None).await.unwrap();
 
-        // Should have same count
-        prop_assert_eq!(
-            listed.len(),
-            keys.len(),
-            "Listed keys count should match set keys"
-        );
-
-        // All set keys should be in the list
-        for key in &keys {
-            prop_assert!(
-                listed.contains(key),
-                "Set key {} should be in list",
-                key
+            // Should have same count
+            prop_assert_eq!(
+                listed.len(),
+                keys.len(),
+                "Listed keys count should match set keys"
             );
-        }
+
+            // All set keys should be in the list
+            for key in &keys {
+                prop_assert!(
+                    listed.contains(key),
+                    "Set key {} should be in list",
+                    key
+                );
+            }
+            Ok(())
+        })?;
     }
 
     /// Invariant: List with prefix filters correctly.
@@ -208,38 +237,44 @@ proptest! {
         nonmatching_key in "[a-z]{10,20}"
     ) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
         let matching_key = format!("{prefix}{matching_suffix}");
 
-        // Set matching and non-matching keys
-        store.set(&matching_key, b"match").unwrap();
-        store.set(&nonmatching_key, b"nomatch").unwrap();
+        block_on(async {
+            // Set matching and non-matching keys
+            store.set(&matching_key, b"match", None).await.unwrap();
+            store.set(&nonmatching_key, b"nomatch", None).await.unwrap();
 
-        // List with prefix
-        let listed = store.list_keys(Some(&prefix)).unwrap();
+            // List with prefix
+            let listed = store.list_keys(Some(&prefix)).await.unwrap();
 
-        // Should contain matching key
-        prop_assert!(
-            listed.contains(&matching_key),
-            "Matching key should be in prefixed list"
-        );
+            // Should contain matching key
+            prop_assert!(
+                listed.contains(&matching_key),
+                "Matching key should be in prefixed list"
+            );
 
-        // Should not contain non-matching key
-        prop_assert!(
-            !listed.contains(&nonmatching_key),
-            "Non-matching key should not be in prefixed list"
-        );
+            // Should not contain non-matching key
+            prop_assert!(
+                !listed.contains(&nonmatching_key),
+                "Non-matching key should not be in prefixed list"
+            );
+            Ok(())
+        })?;
     }
 
     /// Invariant: Empty database returns empty list.
     #[test]
     fn empty_database_empty_list(_dummy in Just(())) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        let listed = store.list_keys(None).unwrap();
-        prop_assert!(listed.is_empty(), "Empty database should return empty list");
+        block_on(async {
+            let listed = store.list_keys(None).await.unwrap();
+            prop_assert!(listed.is_empty(), "Empty database should return empty list");
+            Ok(())
+        })?;
     }
 }
 
@@ -255,16 +290,19 @@ proptest! {
     #[test]
     fn set_with_ttl_works(key in valid_key(), value in binary_value(), ttl in ttl_seconds()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set with TTL should not error
-        let result = store.set_with_ttl(&key, &value, ttl);
-        prop_assert!(result.is_ok(), "set_with_ttl should succeed");
+        block_on(async {
+            // Set with TTL should not error
+            let result = store.set(&key, &value, Some(Duration::from_secs(ttl))).await;
+            prop_assert!(result.is_ok(), "set with TTL should succeed");
 
-        // Should be retrievable immediately (not expired yet)
-        let retrieved = store.get(&key).unwrap();
-        prop_assert!(retrieved.is_some(), "Key should exist immediately after set_with_ttl");
-        prop_assert_eq!(retrieved.unwrap(), value);
+            // Should be retrievable immediately (not expired yet)
+            let retrieved = store.get(&key).await.unwrap();
+            prop_assert!(retrieved.is_some(), "Key should exist immediately after set with TTL");
+            prop_assert_eq!(retrieved.unwrap(), value);
+            Ok(())
+        })?;
     }
 
     /// Invariant: Zero TTL creates entry that expires immediately.
@@ -273,35 +311,41 @@ proptest! {
     #[test]
     fn zero_ttl_expires_immediately(key in valid_key(), value in binary_value()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set with 0 TTL - this expires at current time
-        store.set_with_ttl(&key, &value, 0).unwrap();
+        block_on(async {
+            // Set with 0 TTL - this expires at current time
+            store.set(&key, &value, Some(Duration::ZERO)).await.unwrap();
 
-        // Small delay to ensure we're past the expiration
-        std::thread::sleep(std::time::Duration::from_millis(10));
+            // Small delay to ensure we're past the expiration
+            tokio::time::sleep(Duration::from_millis(10)).await;
 
-        // Should be expired (returns None and cleans up)
-        let retrieved = store.get(&key).unwrap();
-        prop_assert!(
-            retrieved.is_none(),
-            "Key with TTL=0 should expire immediately"
-        );
+            // Should be expired (returns None and cleans up)
+            let retrieved = store.get(&key).await.unwrap();
+            prop_assert!(
+                retrieved.is_none(),
+                "Key with TTL=0 should expire immediately"
+            );
+            Ok(())
+        })?;
     }
 
     /// Invariant: Regular set creates entry that never expires.
     #[test]
     fn regular_set_never_expires(key in valid_key(), value in binary_value()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Regular set (no TTL)
-        store.set(&key, &value).unwrap();
+        block_on(async {
+            // Regular set (no TTL)
+            store.set(&key, &value, None).await.unwrap();
 
-        // Should always exist (can't truly test "never" but can verify it exists)
-        let retrieved = store.get(&key).unwrap();
-        prop_assert!(retrieved.is_some(), "Key without TTL should exist");
-        prop_assert_eq!(retrieved.unwrap(), value);
+            // Should always exist (can't truly test "never" but can verify it exists)
+            let retrieved = store.get(&key).await.unwrap();
+            prop_assert!(retrieved.is_some(), "Key without TTL should exist");
+            prop_assert_eq!(retrieved.unwrap(), value);
+            Ok(())
+        })?;
     }
 }
 
@@ -316,20 +360,23 @@ proptest! {
         let tmp = TempDir::new().unwrap();
         let db_path = tmp.path().join("kv.redb");
 
-        // Set value and close store
-        {
-            let store = KvStore::open(&db_path).unwrap();
-            store.set(&key, &value).unwrap();
-            // store dropped here
-        }
+        block_on(async {
+            // Set value and close store
+            {
+                let store = KvStore::file(&db_path).unwrap();
+                store.set(&key, &value, None).await.unwrap();
+                // store dropped here
+            }
 
-        // Reopen and verify data exists
-        {
-            let store = KvStore::open(&db_path).unwrap();
-            let retrieved = store.get(&key).unwrap();
-            prop_assert!(retrieved.is_some(), "Data should persist after reopen");
-            prop_assert_eq!(retrieved.unwrap(), value);
-        }
+            // Reopen and verify data exists
+            {
+                let store = KvStore::file(&db_path).unwrap();
+                let retrieved = store.get(&key).await.unwrap();
+                prop_assert!(retrieved.is_some(), "Data should persist after reopen");
+                prop_assert_eq!(retrieved.unwrap(), value);
+            }
+            Ok(())
+        })?;
     }
 
     /// Invariant: Multiple stores can share the same database sequentially.
@@ -343,34 +390,37 @@ proptest! {
         let tmp = TempDir::new().unwrap();
         let db_path = tmp.path().join("kv.redb");
 
-        // First store sets key1
-        {
-            let store = KvStore::open(&db_path).unwrap();
-            store.set(&key1, &value1).unwrap();
-        }
+        block_on(async {
+            // First store sets key1
+            {
+                let store = KvStore::file(&db_path).unwrap();
+                store.set(&key1, &value1, None).await.unwrap();
+            }
 
-        // Second store sets key2 and reads key1
-        {
-            let store = KvStore::open(&db_path).unwrap();
-            store.set(&key2, &value2).unwrap();
+            // Second store sets key2 and reads key1
+            {
+                let store = KvStore::file(&db_path).unwrap();
+                store.set(&key2, &value2, None).await.unwrap();
 
-            // key1 should still exist
-            let v1 = store.get(&key1).unwrap();
-            prop_assert!(v1.is_some());
-            prop_assert_eq!(v1.unwrap(), value1.clone());
-        }
+                // key1 should still exist
+                let v1 = store.get(&key1).await.unwrap();
+                prop_assert!(v1.is_some());
+                prop_assert_eq!(v1.unwrap(), value1.clone());
+            }
 
-        // Third store reads both
-        {
-            let store = KvStore::open(&db_path).unwrap();
-            let v1 = store.get(&key1).unwrap();
-            let v2 = store.get(&key2).unwrap();
+            // Third store reads both
+            {
+                let store = KvStore::file(&db_path).unwrap();
+                let v1 = store.get(&key1).await.unwrap();
+                let v2 = store.get(&key2).await.unwrap();
 
-            prop_assert!(v1.is_some());
-            prop_assert!(v2.is_some());
-            prop_assert_eq!(v1.unwrap(), value1);
-            prop_assert_eq!(v2.unwrap(), value2);
-        }
+                prop_assert!(v1.is_some());
+                prop_assert!(v2.is_some());
+                prop_assert_eq!(v1.unwrap(), value1);
+                prop_assert_eq!(v2.unwrap(), value2);
+            }
+            Ok(())
+        })?;
     }
 }
 
@@ -383,76 +433,88 @@ proptest! {
     #[test]
     fn empty_value_works(key in valid_key()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set empty value
-        store.set(&key, &[]).unwrap();
+        block_on(async {
+            // Set empty value
+            store.set(&key, &[], None).await.unwrap();
 
-        // Should retrieve empty value
-        let retrieved = store.get(&key).unwrap();
-        prop_assert!(retrieved.is_some());
-        prop_assert!(retrieved.unwrap().is_empty(), "Should retrieve empty value");
+            // Should retrieve empty value
+            let retrieved = store.get(&key).await.unwrap();
+            prop_assert!(retrieved.is_some());
+            prop_assert!(retrieved.unwrap().is_empty(), "Should retrieve empty value");
+            Ok(())
+        })?;
     }
 
     /// Invariant: Large values are handled correctly.
     #[test]
     fn large_value_works(key in valid_key()) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Create a large value (1MB)
-        let large_value: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
+        block_on(async {
+            // Create a large value (1MB)
+            let large_value: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
 
-        // Set and retrieve
-        store.set(&key, &large_value).unwrap();
-        let retrieved = store.get(&key).unwrap();
+            // Set and retrieve
+            store.set(&key, &large_value, None).await.unwrap();
+            let retrieved = store.get(&key).await.unwrap();
 
-        prop_assert!(retrieved.is_some());
-        prop_assert_eq!(retrieved.unwrap(), large_value);
+            prop_assert!(retrieved.is_some());
+            prop_assert_eq!(retrieved.unwrap(), large_value);
+            Ok(())
+        })?;
     }
 
     /// Invariant: Many keys can be stored and retrieved.
     #[test]
     fn many_keys_work(keys in prop::collection::hash_set(valid_key(), 50..100)) {
         let tmp = TempDir::new().unwrap();
-        let store = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store = KvStore::file(tmp.path().join("kv.redb")).unwrap();
 
-        // Set all keys with unique values
-        for (i, key) in keys.iter().enumerate() {
-            store.set(key, &[i as u8]).unwrap();
-        }
+        block_on(async {
+            // Set all keys with unique values
+            for (i, key) in keys.iter().enumerate() {
+                store.set(key, &[i as u8], None).await.unwrap();
+            }
 
-        // Verify all can be retrieved
-        for (i, key) in keys.iter().enumerate() {
-            let retrieved = store.get(key).unwrap();
-            prop_assert!(retrieved.is_some(), "Key {} should exist", key);
-            prop_assert_eq!(retrieved.unwrap(), vec![i as u8]);
-        }
+            // Verify all can be retrieved
+            for (i, key) in keys.iter().enumerate() {
+                let retrieved = store.get(key).await.unwrap();
+                prop_assert!(retrieved.is_some(), "Key {} should exist", key);
+                prop_assert_eq!(retrieved.unwrap(), vec![i as u8]);
+            }
 
-        // List should return all
-        let listed = store.list_keys(None).unwrap();
-        prop_assert_eq!(listed.len(), keys.len());
+            // List should return all
+            let listed = store.list_keys(None).await.unwrap();
+            prop_assert_eq!(listed.len(), keys.len());
+            Ok(())
+        })?;
     }
 
     /// Invariant: Clone store shares the same database.
     #[test]
     fn cloned_store_shares_data(key in valid_key(), value in binary_value()) {
         let tmp = TempDir::new().unwrap();
-        let store1 = KvStore::open(tmp.path().join("kv.redb")).unwrap();
+        let store1 = KvStore::file(tmp.path().join("kv.redb")).unwrap();
         let store2 = store1.clone();
 
-        // Write through store1
-        store1.set(&key, &value).unwrap();
+        block_on(async {
+            // Write through store1
+            store1.set(&key, &value, None).await.unwrap();
 
-        // Read through store2
-        let retrieved = store2.get(&key).unwrap();
-        prop_assert!(retrieved.is_some(), "Cloned store should see same data");
-        prop_assert_eq!(retrieved.unwrap(), value);
+            // Read through store2
+            let retrieved = store2.get(&key).await.unwrap();
+            prop_assert!(retrieved.is_some(), "Cloned store should see same data");
+            prop_assert_eq!(retrieved.unwrap(), value);
 
-        // Delete through store2
-        store2.delete(&key).unwrap();
+            // Delete through store2
+            store2.delete(&key).await.unwrap();
 
-        // Should be gone from store1 too
-        prop_assert!(!store1.exists(&key).unwrap(), "Delete via clone should affect original");
+            // Should be gone from store1 too
+            prop_assert!(!store1.exists(&key).await.unwrap(), "Delete via clone should affect original");
+            Ok(())
+        })?;
     }
 }

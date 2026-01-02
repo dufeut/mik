@@ -34,15 +34,6 @@ pub enum LoadBalanceStrategy {
     /// Round-robin selection - distributes requests evenly in order.
     #[default]
     RoundRobin,
-    /// Least connections - selects backend with fewest active connections.
-    /// (Not yet implemented - falls back to RoundRobin)
-    LeastConnections,
-    /// Random selection - randomly selects from healthy backends.
-    /// (Not yet implemented - falls back to RoundRobin)
-    Random,
-    /// Weighted round-robin - uses backend weights for distribution.
-    /// (Not yet implemented - falls back to RoundRobin)
-    Weighted,
 }
 
 impl LoadBalanceStrategy {
@@ -53,11 +44,7 @@ impl LoadBalanceStrategy {
     /// * `num_backends` - The total number of backends
     pub fn into_selector(self, num_backends: usize) -> Box<dyn Selection> {
         match self {
-            Self::RoundRobin | Self::LeastConnections | Self::Random | Self::Weighted => {
-                // For now, all strategies use RoundRobin
-                // TODO: Implement other strategies
-                Box::new(RoundRobin::new(num_backends))
-            },
+            Self::RoundRobin => Box::new(RoundRobin::new(num_backends)),
         }
     }
 }
@@ -183,23 +170,5 @@ mod tests {
         let selector = LoadBalanceStrategy::RoundRobin.into_selector(3);
         let healthy = vec![0, 1, 2];
         assert!(selector.select(&healthy).is_some());
-    }
-
-    #[test]
-    fn test_all_strategies_fallback_to_round_robin() {
-        // All strategies should work (even if they just use RoundRobin internally)
-        for strategy in [
-            LoadBalanceStrategy::RoundRobin,
-            LoadBalanceStrategy::LeastConnections,
-            LoadBalanceStrategy::Random,
-            LoadBalanceStrategy::Weighted,
-        ] {
-            let selector = strategy.into_selector(3);
-            let healthy = vec![0, 1, 2];
-            assert!(
-                selector.select(&healthy).is_some(),
-                "Strategy {strategy:?} failed"
-            );
-        }
     }
 }

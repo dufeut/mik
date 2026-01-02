@@ -419,26 +419,9 @@ fn print_verbose_version() {
     println!("  (Use 'cargo tree -p mik' for full dependency tree)");
 
     println!("\nRequired external tools:");
-    check_tool("cargo-component", "cargo install cargo-component");
-    check_tool("wac", "cargo install wac-cli");
-    check_tool("wasm-tools", "cargo install wasm-tools");
-}
-
-fn check_tool(name: &str, install_cmd: &str) {
-    use std::process::Command;
-
-    let result = Command::new(name).arg("--version").output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            let version_line = version.lines().next().unwrap_or("unknown");
-            println!("  ✓ {version_line}");
-        },
-        _ => {
-            println!("  ✗ {name} not found (install: {install_cmd})");
-        },
-    }
+    ui::print_tool_check("cargo-component", "cargo install cargo-component");
+    ui::print_tool_check("wac", "cargo install wac-cli");
+    ui::print_tool_check("wasm-tools", "cargo install wasm-tools");
 }
 
 #[tokio::main]

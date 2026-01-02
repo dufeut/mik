@@ -48,10 +48,7 @@ fn get_wasm_tools() -> Result<PathBuf> {
     }
 
     // Check if we have it in ~/.mik/bin/
-    let mik_bin = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
-        .join(".mik")
-        .join("bin");
+    let mik_bin = crate::daemon::paths::get_bin_dir()?;
 
     #[cfg(windows)]
     let wasm_tools_path = mik_bin.join("wasm-tools.exe");
