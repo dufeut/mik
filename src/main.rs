@@ -6,7 +6,7 @@
 //! - Building WASM components (`mik build`)
 //! - Running development servers (`mik dev`, `mik run`)
 //! - Managing background instances (`mik ps`, `mik stop`)
-//! - Publishing to OCI registries (`mik publish`, `mik sync`)
+//! - Pulling dependencies from OCI registries (`mik add`, `mik sync`)
 //!
 //! See `mik --help` for full usage information.
 
@@ -45,9 +45,8 @@ COMMON WORKFLOWS:
   mik add user/repo:v1.0.0          # OCI with tag
   mik add --path ../my-component    # Local development
 
-  # Build and deploy
+  # Build for production
   mik build --release --compose
-  mik publish --tag v1.0.0
 
 EXAMPLES:
   mik new my-service                Create new project
@@ -332,24 +331,6 @@ enum Commands {
         #[arg(long)]
         lb: bool,
     },
-    /// Publish component to `GitHub` Container Registry (`ghcr.io`)
-    ///
-    /// Builds release component and pushes to ghcr.io.
-    /// Requires `GitHub` authentication (gh auth login).
-    ///
-    /// Examples:
-    ///   mik publish                  # Use version from mik.toml
-    ///   mik publish --tag v1.0.0     # Override version tag
-    ///   mik publish --dry-run        # Preview without publishing
-    #[cfg(feature = "registry")]
-    Publish {
-        /// Version tag (default: from mik.toml)
-        #[arg(long)]
-        tag: Option<String>,
-        /// Show what would be published without pushing
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Synchronize dependencies from OCI registries
     ///
     /// Downloads missing dependencies and removes stale modules.
@@ -570,10 +551,6 @@ async fn main() -> Result<()> {
                 // Foreground mode
                 commands::run::execute(component.as_deref(), workers, port, local, lb).await?;
             }
-        },
-        #[cfg(feature = "registry")]
-        Commands::Publish { tag, dry_run } => {
-            commands::publish::execute(tag.as_deref(), dry_run)?;
         },
         #[cfg(feature = "registry")]
         Commands::Sync => {

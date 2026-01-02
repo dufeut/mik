@@ -172,6 +172,7 @@ pub fn print_error_section(title: &str, message: &str) {
 ///     "Verify the server is running",
 /// ]);
 /// ```
+#[allow(dead_code)]
 pub fn print_error_details(title: &str, message: &str, details: &[&str]) {
     print_section(title);
     eprintln!("\n{message}");

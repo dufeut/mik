@@ -9,7 +9,6 @@
 //! - [`run`] - Production-like server (foreground or detached)
 //! - [`daemon`] - Instance management (stop/ps/logs)
 //! - [`add`] - Dependency management (OCI/git/path)
-//! - [`publish`] - Push components to OCI registries
 //! - [`pull`] - Pull components from registries
 //! - [`cache`] - AOT cache management
 //! - [`strip`] - WASM binary size reduction
@@ -22,8 +21,6 @@ pub mod cache;
 pub mod daemon;
 pub mod dev;
 pub mod new;
-#[cfg(feature = "registry")]
-pub mod publish;
 #[cfg(feature = "registry")]
 pub mod pull;
 pub mod run;
