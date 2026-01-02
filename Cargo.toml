@@ -42,6 +42,7 @@ rustls = ["reqwest/rustls"]
 [dependencies]
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 anyhow = "1.0"
 thiserror = "2"
 

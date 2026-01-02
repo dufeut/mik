@@ -17,7 +17,8 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Generator, Shell};
 use std::str::FromStr;
 
 mod cache;
@@ -180,6 +181,21 @@ enum Commands {
     Cache {
         #[command(subcommand)]
         action: CacheAction,
+    },
+    /// Generate shell completions
+    ///
+    /// Outputs shell completion script to stdout.
+    /// Add to your shell config for tab completion support.
+    ///
+    /// Examples:
+    ///   mik completions bash > ~/.bash_completion.d/mik
+    ///   mik completions zsh > ~/.zfunc/_mik
+    ///   mik completions fish > ~/.config/fish/completions/mik.fish
+    ///   mik completions powershell > _mik.ps1
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 
     // =========================================================================
@@ -394,6 +410,15 @@ enum CacheAction {
     Clear,
 }
 
+fn print_completions<G: Generator>(generator: G, cmd: &mut clap::Command) {
+    clap_complete::generate(
+        generator,
+        cmd,
+        cmd.get_name().to_string(),
+        &mut std::io::stdout(),
+    );
+}
+
 fn print_verbose_version() {
     println!("mik {}", env!("CARGO_PKG_VERSION"));
 
@@ -461,6 +486,9 @@ async fn main() -> Result<()> {
         },
         Commands::Cache { action } => {
             commands::cache::execute(action)?;
+        },
+        Commands::Completions { shell } => {
+            print_completions(shell, &mut Cli::command());
         },
 
         // Build commands
