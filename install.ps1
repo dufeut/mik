@@ -1,53 +1,122 @@
-# mik installer for Windows
-# Usage: powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/dufeut/mik/main/install.ps1 | iex"
+# mik installer script for Windows
+# Usage: irm https://raw.githubusercontent.com/dufeut/mik/main/install.ps1 | iex
+#
+# Options (via env vars):
+#   $env:MIK_VERSION = "v0.1.0"           Install specific version
+#   $env:MIK_NO_COMPLETIONS = "1"         Skip shell completions
+#   $env:MIK_INSTALL_DIR = "C:\mik"       Custom install directory
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "dufeut/mik"
-$InstallDir = if ($env:MIK_INSTALL_DIR) { $env:MIK_INSTALL_DIR } else { "$env:USERPROFILE\.mik\bin" }
+function Write-Info { Write-Host "==> " -ForegroundColor Blue -NoNewline; Write-Host $args }
+function Write-Success { Write-Host "==> " -ForegroundColor Green -NoNewline; Write-Host $args }
+function Write-Warn { Write-Host "==> " -ForegroundColor Yellow -NoNewline; Write-Host $args }
 
 function Get-LatestVersion {
-    $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-    return $response.tag_name -replace '^v', ''
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/dufeut/mik/releases/latest"
+    return $release.tag_name
 }
 
 function Install-Mik {
-    $Version = Get-LatestVersion
-    $Platform = "x86_64-pc-windows-msvc"
+    Write-Host ""
+    Write-Host "  ┌─────────────────────────────────────┐"
+    Write-Host "  │  mik - WASI HTTP Component Runtime  │"
+    Write-Host "  └─────────────────────────────────────┘"
+    Write-Host ""
 
-    Write-Host "Installing mik v$Version for $Platform..."
+    # Configuration
+    $version = if ($env:MIK_VERSION) { $env:MIK_VERSION } else { Get-LatestVersion }
+    $installDir = if ($env:MIK_INSTALL_DIR) { $env:MIK_INSTALL_DIR } else { "$env:LOCALAPPDATA\mik\bin" }
+    $platform = "x86_64-pc-windows-msvc"
 
-    $DownloadUrl = "https://github.com/$Repo/releases/download/v$Version/mik-$Platform.zip"
-    $TempDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "mik-install-$(Get-Random)")
-    $TempFile = Join-Path $TempDir "mik.zip"
+    Write-Info "Platform: $platform"
+    Write-Info "Version: $version"
+    Write-Info "Install directory: $installDir"
+    Write-Host ""
 
-    Write-Host "Downloading from $DownloadUrl..."
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempFile
+    # Create install directory
+    if (-not (Test-Path $installDir)) {
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    }
 
-    Write-Host "Extracting..."
-    Expand-Archive -Path $TempFile -DestinationPath $TempDir -Force
+    # Download
+    $url = "https://github.com/dufeut/mik/releases/download/$version/mik-$platform.zip"
+    $zipPath = "$env:TEMP\mik.zip"
+    
+    Write-Info "Downloading mik $version..."
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+    } catch {
+        Write-Host "Error: Failed to download from $url" -ForegroundColor Red
+        Write-Host "Make sure the version exists: https://github.com/dufeut/mik/releases" -ForegroundColor Red
+        exit 1
+    }
 
-    Write-Host "Installing to $InstallDir..."
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Move-Item -Path (Join-Path $TempDir "mik.exe") -Destination (Join-Path $InstallDir "mik.exe") -Force
+    # Extract
+    Write-Info "Extracting..."
+    Expand-Archive -Path $zipPath -DestinationPath $env:TEMP\mik-extract -Force
+    Move-Item -Path "$env:TEMP\mik-extract\mik.exe" -Destination "$installDir\mik.exe" -Force
+    
+    # Cleanup
+    Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$env:TEMP\mik-extract" -Recurse -Force -ErrorAction SilentlyContinue
 
-    Remove-Item -Path $TempDir -Recurse -Force
+    Write-Success "Installed mik to $installDir\mik.exe"
 
-    # Add to PATH if not already there
-    $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($CurrentPath -notlike "*$InstallDir*") {
+    # Install completions
+    if (-not $env:MIK_NO_COMPLETIONS) {
         Write-Host ""
-        Write-Host "Adding $InstallDir to your PATH..."
-        [Environment]::SetEnvironmentVariable("Path", "$InstallDir;$CurrentPath", "User")
-        $env:Path = "$InstallDir;$env:Path"
+        Write-Info "Installing PowerShell completions..."
+        
+        $completionScript = & "$installDir\mik.exe" completions powershell
+        
+        # Ensure profile directory exists
+        $profileDir = Split-Path -Parent $PROFILE
+        if (-not (Test-Path $profileDir)) {
+            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+        }
+        
+        # Check if already in profile
+        if (Test-Path $PROFILE) {
+            $profileContent = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+            if ($profileContent -and $profileContent.Contains("Register-ArgumentCompleter -Native -CommandName 'mik'")) {
+                Write-Success "PowerShell completions already configured"
+            } else {
+                Add-Content -Path $PROFILE -Value "`n# mik completions`n$completionScript"
+                Write-Success "PowerShell completions added to $PROFILE"
+            }
+        } else {
+            Set-Content -Path $PROFILE -Value "# mik completions`n$completionScript"
+            Write-Success "PowerShell completions added to $PROFILE"
+        }
+        
+        Write-Host "    Restart PowerShell or run: . `$PROFILE"
+    }
+
+    # Check PATH
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($userPath -notlike "*$installDir*") {
+        Write-Host ""
+        Write-Warn "$installDir is not in your PATH"
+        
+        $addToPath = Read-Host "Add to PATH? (Y/n)"
+        if ($addToPath -ne "n" -and $addToPath -ne "N") {
+            [Environment]::SetEnvironmentVariable("Path", "$userPath;$installDir", "User")
+            $env:Path = "$env:Path;$installDir"
+            Write-Success "Added to PATH (restart terminal for full effect)"
+        } else {
+            Write-Host "    Add manually: `$env:Path += `";$installDir`""
+        }
     }
 
     Write-Host ""
-    Write-Host "mik v$Version installed successfully!" -ForegroundColor Green
+    Write-Success "Installation complete!"
     Write-Host ""
-    Write-Host "Restart your terminal to use mik, or run:"
-    Write-Host ""
-    Write-Host "  `$env:Path = `"$InstallDir;`$env:Path`""
+    Write-Host "  Get started:"
+    Write-Host "    mik new my-service"
+    Write-Host "    cd my-service"
+    Write-Host "    mik build -rc"
+    Write-Host "    mik dev"
     Write-Host ""
 }
 

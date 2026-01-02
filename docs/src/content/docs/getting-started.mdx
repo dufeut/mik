@@ -24,9 +24,20 @@ cargo install wac-cli
 
 **Quick install (recommended):**
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/dufeut/mik/main/install.sh | bash
-```
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+<Tabs>
+  <TabItem label="Linux/macOS">
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/dufeut/mik/main/install.sh | bash
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```powershell
+    irm https://raw.githubusercontent.com/dufeut/mik/main/install.ps1 | iex
+    ```
+  </TabItem>
+</Tabs>
 
 This downloads the latest release and sets up shell completions automatically.
 
