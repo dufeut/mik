@@ -33,8 +33,8 @@ jobs:
 
       - name: Run benchmarks
         run: |
-          cargo bench --bench runtime_benchmarks -- --noplot 2>&1 | tee benchmark-output.txt
-          cargo bench --bench runtime_bench -- --noplot 2>&1 | tee -a benchmark-output.txt
+          cargo bench --bench runtime_benchmarks -- --noplot --output-format bencher | tee benchmark-output.txt
+          cargo bench --bench runtime_bench -- --noplot --output-format bencher | tee -a benchmark-output.txt
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
