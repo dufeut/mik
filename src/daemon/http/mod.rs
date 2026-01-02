@@ -79,6 +79,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
+use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 
 use crate::daemon::config::DaemonConfig;
@@ -90,10 +91,11 @@ use crate::daemon::process::{self, SpawnConfig};
 use crate::daemon::services::{kv::KvStore, sql::SqlService, storage::StorageService};
 use crate::daemon::state::{Instance, StateStore, Status};
 
+pub mod audit;
 pub mod handlers;
 pub mod types;
 
-// Re-export all types for backward compatibility
+// Re-export types for convenience
 pub use types::*;
 
 // Use handlers from the handlers module
@@ -684,6 +686,12 @@ static API_KEY: std::sync::LazyLock<Option<String>> =
 /// - `/metrics` - Prometheus metrics (for scraping)
 ///
 /// If `MIK_API_KEY` is not set, all requests pass through (backwards compatible).
+///
+/// # Security
+///
+/// Uses constant-time comparison via the `subtle` crate to prevent timing attacks.
+/// An attacker cannot determine which characters of the API key are correct by
+/// measuring response times.
 async fn api_key_auth_middleware(request: Request, next: Next) -> Response {
     // If no API key configured, skip authentication
     let Some(expected_key) = API_KEY.as_ref() else {
@@ -702,16 +710,48 @@ async fn api_key_auth_middleware(request: Request, next: Next) -> Response {
         .get("X-API-Key")
         .and_then(|v| v.to_str().ok());
 
-    match provided_key {
-        Some(key) if key == expected_key => next.run(request).await,
-        Some(_) => {
+    if let Some(key) = provided_key {
+        // Constant-time comparison prevents timing attacks:
+        // An attacker cannot determine which characters are correct by
+        // measuring response time differences.
+        let key_bytes = key.as_bytes();
+        let expected_bytes = expected_key.as_bytes();
+
+        // Only perform constant-time comparison if lengths match
+        // (length comparison is not constant-time, but revealing length
+        // is acceptable for API keys and avoids panic on slice comparison)
+        let is_valid =
+            key_bytes.len() == expected_bytes.len() && bool::from(key_bytes.ct_eq(expected_bytes));
+
+        if is_valid {
+            // Log successful auth for audit trail
+            audit::log_audit_event(audit::AuditEvent::AuthSuccess {
+                remote_addr: "[redacted]"
+                    .parse()
+                    .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 0))),
+            });
+            next.run(request).await
+        } else {
+            // Log failed auth attempt for security monitoring
+            audit::log_audit_event(audit::AuditEvent::AuthFailure {
+                remote_addr: "[redacted]"
+                    .parse()
+                    .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 0))),
+                reason: "Invalid API key".to_string(),
+            });
             tracing::warn!(path = %path, "API key authentication failed: invalid key");
             (StatusCode::UNAUTHORIZED, "Invalid API key").into_response()
-        },
-        None => {
-            tracing::warn!(path = %path, "API key authentication failed: missing header");
-            (StatusCode::UNAUTHORIZED, "Missing X-API-Key header").into_response()
-        },
+        }
+    } else {
+        // Log missing header for security monitoring
+        audit::log_audit_event(audit::AuditEvent::AuthFailure {
+            remote_addr: "[redacted]"
+                .parse()
+                .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 0))),
+            reason: "Missing X-API-Key header".to_string(),
+        });
+        tracing::warn!(path = %path, "API key authentication failed: missing header");
+        (StatusCode::UNAUTHORIZED, "Missing X-API-Key header").into_response()
     }
 }
 

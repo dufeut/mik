@@ -1,0 +1,46 @@
+[Unit]
+Description=mik WASI HTTP Runtime
+Documentation=https://github.com/dufeut/mik
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mik
+Group=mik
+WorkingDirectory=/var/lib/mik
+
+# Main process
+ExecStart=/usr/local/bin/mik run \
+    --port 3000 \
+    --config /etc/mik/mik.toml \
+    /var/lib/mik/modules/
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=2G
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/mik /var/log/mik
+
+# Environment
+Environment=RUST_LOG=info
+EnvironmentFile=-/etc/mik/env
+
+[Install]
+WantedBy=multi-user.target

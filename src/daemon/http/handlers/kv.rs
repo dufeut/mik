@@ -3,6 +3,8 @@
 //! Handlers for key-value store operations including listing keys,
 //! getting values, setting values with optional TTL, and deleting keys.
 
+use std::time::Duration;
+
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -23,7 +25,7 @@ pub(crate) async fn kv_list(
 ) -> Result<Json<KvListResponse>, AppError> {
     metrics::record_kv_operation("list");
     let kv = get_kv(&state).await?;
-    let keys = kv.list_keys_async(query.prefix).await?;
+    let keys = kv.list_keys(query.prefix.as_deref()).await?;
     Ok(Json(KvListResponse { keys }))
 }
 
@@ -35,7 +37,7 @@ pub(crate) async fn kv_get(
     metrics::record_kv_operation("get");
     let kv = get_kv(&state).await?;
     let bytes = kv
-        .get_async(key.clone())
+        .get(&key)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Key '{key}' not found")))?;
 
@@ -54,11 +56,9 @@ pub(crate) async fn kv_set(
     metrics::record_kv_operation("set");
     let kv = get_kv(&state).await?;
     let value_bytes = req.value.into_bytes();
+    let ttl = req.ttl.map(Duration::from_secs);
 
-    match req.ttl {
-        Some(ttl) => kv.set_with_ttl_async(key, value_bytes, ttl).await?,
-        None => kv.set_async(key, value_bytes).await?,
-    }
+    kv.set(&key, &value_bytes, ttl).await?;
 
     Ok(StatusCode::OK)
 }
@@ -70,6 +70,6 @@ pub(crate) async fn kv_delete(
 ) -> Result<StatusCode, AppError> {
     metrics::record_kv_operation("delete");
     let kv = get_kv(&state).await?;
-    kv.delete_async(key).await?;
+    kv.delete(&key).await?;
     Ok(StatusCode::NO_CONTENT)
 }

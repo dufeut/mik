@@ -31,7 +31,7 @@ use crate::runtime::SharedState;
 use crate::runtime::security;
 use crate::runtime::spans::{SpanBuilder, SpanCollector};
 
-// Re-export public types for backward compatibility
+// Re-export public types for convenience
 pub(crate) use types::{HostCallResult, HostMessage, ScriptResponse};
 
 use bindings::HostBridge;

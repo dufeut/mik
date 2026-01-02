@@ -21,7 +21,6 @@ use clap::{Parser, Subcommand};
 use std::str::FromStr;
 
 mod commands;
-mod config;
 mod constants;
 mod daemon;
 mod manifest;

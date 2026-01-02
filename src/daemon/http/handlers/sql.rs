@@ -74,7 +74,7 @@ pub(crate) async fn sql_query(
     let sql = get_sql(&state).await?;
     let params: Vec<SqlValue> = req.params.iter().map(json_to_sql_value).collect();
 
-    let rows = sql.query_async(req.sql, params).await?;
+    let rows = sql.query(&req.sql, &params).await?;
     metrics::record_sql_query("query", start.elapsed().as_secs_f64());
 
     // Extract column names from the first row (if available)
@@ -100,7 +100,7 @@ pub(crate) async fn sql_execute(
     let sql = get_sql(&state).await?;
     let params: Vec<SqlValue> = req.params.iter().map(json_to_sql_value).collect();
 
-    let rows_affected = sql.execute_async(req.sql, params).await?;
+    let rows_affected = sql.execute(&req.sql, &params).await?;
     metrics::record_sql_query("execute", start.elapsed().as_secs_f64());
 
     Ok(Json(SqlExecuteResponse {
@@ -130,7 +130,7 @@ pub(crate) async fn sql_batch(
         .collect();
 
     // Execute all statements atomically in a transaction
-    let rows_affected_list = sql.execute_batch_atomic_async(statements).await?;
+    let rows_affected_list = sql.execute_batch_atomic(statements).await?;
     metrics::record_sql_query("batch", start.elapsed().as_secs_f64());
 
     let results = rows_affected_list

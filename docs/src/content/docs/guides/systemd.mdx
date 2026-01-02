@@ -1,0 +1,523 @@
+---
+title: systemd Service Setup
+description: Running mik as a systemd service
+---
+
+This guide covers running mik as a systemd service for production Linux deployments.
+
+## Prerequisites
+
+- Linux system with systemd
+- mik binary installed to `/usr/local/bin/mik`
+- WASM modules deployed to `/var/lib/mik/`
+
+## Basic Service
+
+Create `/etc/systemd/system/mik.service`:
+
+```ini
+[Unit]
+Description=mik WASI HTTP Runtime
+Documentation=https://github.com/dufeut/mik
+After=network.target
+
+[Service]
+Type=simple
+User=mik
+Group=mik
+WorkingDirectory=/var/lib/mik
+ExecStart=/usr/local/bin/mik run --port 3000 /var/lib/mik/app.wasm
+Restart=always
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/mik
+
+# Environment
+Environment=RUST_LOG=info
+EnvironmentFile=-/etc/mik/mik.env
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## User Setup
+
+Create a dedicated service user:
+
+```bash
+# Create system user (no login shell, no home)
+sudo useradd -r -s /usr/sbin/nologin mik
+
+# Create directories
+sudo mkdir -p /var/lib/mik/modules
+sudo mkdir -p /var/lib/mik/data
+sudo mkdir -p /etc/mik
+
+# Set ownership
+sudo chown -R mik:mik /var/lib/mik
+sudo chmod 700 /var/lib/mik
+```
+
+:::caution
+Never run mik as root in production. Always use a dedicated service user with minimal privileges.
+:::
+
+## Environment File
+
+Create `/etc/mik/mik.env` for sensitive configuration:
+
+```bash
+# API key for daemon endpoints
+MIK_API_KEY=your-secret-key-here
+
+# Log level
+RUST_LOG=info
+
+# Optional: custom port
+PORT=3000
+```
+
+Secure the file:
+
+```bash
+sudo chmod 600 /etc/mik/mik.env
+sudo chown root:mik /etc/mik/mik.env
+```
+
+## Management Commands
+
+```bash
+# Reload systemd after creating/modifying service
+sudo systemctl daemon-reload
+
+# Enable service to start on boot
+sudo systemctl enable mik
+
+# Start the service
+sudo systemctl start mik
+
+# View status
+sudo systemctl status mik
+
+# View logs
+sudo journalctl -u mik -f
+
+# Restart after config changes
+sudo systemctl restart mik
+
+# Stop the service
+sudo systemctl stop mik
+```
+
+## Multi-Instance Setup
+
+Run multiple mik instances on different ports:
+
+### Service Template
+
+Create `/etc/systemd/system/mik@.service`:
+
+```ini
+[Unit]
+Description=mik WASI HTTP Runtime - %i
+After=network.target
+
+[Service]
+Type=simple
+User=mik
+Group=mik
+WorkingDirectory=/var/lib/mik/%i
+ExecStart=/usr/local/bin/mik run --port %i /var/lib/mik/%i/app.wasm
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/mik/%i
+
+Environment=RUST_LOG=info
+EnvironmentFile=-/etc/mik/%i.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Using the Template
+
+```bash
+# Create instance directories
+sudo mkdir -p /var/lib/mik/3001
+sudo mkdir -p /var/lib/mik/3002
+
+# Deploy modules
+sudo cp app1.wasm /var/lib/mik/3001/app.wasm
+sudo cp app2.wasm /var/lib/mik/3002/app.wasm
+
+# Start instances
+sudo systemctl enable --now mik@3001
+sudo systemctl enable --now mik@3002
+
+# Check status
+sudo systemctl status 'mik@*'
+```
+
+## Daemon Mode Service
+
+For applications needing embedded services (KV, SQL, Storage):
+
+Create `/etc/systemd/system/mik-daemon.service`:
+
+```ini
+[Unit]
+Description=mik Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=mik
+Group=mik
+WorkingDirectory=/var/lib/mik
+ExecStart=/usr/local/bin/mik daemon
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/mik
+
+Environment=RUST_LOG=info
+EnvironmentFile=-/etc/mik/daemon.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then run instances that connect to the daemon:
+
+```bash
+# Start daemon
+sudo systemctl start mik-daemon
+
+# Start instances (they'll use daemon services)
+mik run --detach --name api --port 3000
+```
+
+## Socket Activation
+
+For on-demand startup, use socket activation:
+
+### Socket Unit
+
+Create `/etc/systemd/system/mik.socket`:
+
+```ini
+[Unit]
+Description=mik Socket
+
+[Socket]
+ListenStream=3000
+Accept=no
+NoDelay=yes
+
+[Install]
+WantedBy=sockets.target
+```
+
+### Modified Service
+
+Update `/etc/systemd/system/mik.service`:
+
+```ini
+[Unit]
+Description=mik WASI HTTP Runtime
+Requires=mik.socket
+After=mik.socket
+
+[Service]
+Type=simple
+User=mik
+Group=mik
+WorkingDirectory=/var/lib/mik
+ExecStart=/usr/local/bin/mik run /var/lib/mik/app.wasm
+StandardInput=socket
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/mik
+
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Enable Socket
+
+```bash
+# Enable socket (not service directly)
+sudo systemctl enable --now mik.socket
+
+# Check socket status
+sudo systemctl status mik.socket
+
+# First request will start the service
+curl http://localhost:3000/health
+```
+
+## Security Hardening
+
+### Full Hardening Options
+
+```ini
+[Service]
+# Process isolation
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Filesystem
+ReadWritePaths=/var/lib/mik
+ReadOnlyPaths=/etc/mik
+
+# Network
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# System calls
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Capabilities
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Misc
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+```
+
+### Verify Security
+
+```bash
+# Check security score
+sudo systemd-analyze security mik.service
+```
+
+## Resource Limits
+
+```ini
+[Service]
+# Memory limits
+MemoryMax=2G
+MemoryHigh=1.5G
+
+# CPU limits
+CPUQuota=200%
+CPUWeight=100
+
+# File descriptors
+LimitNOFILE=65535
+
+# Process limits
+LimitNPROC=4096
+
+# Core dumps (disable in production)
+LimitCORE=0
+```
+
+## Health Monitoring
+
+### Watchdog
+
+Add watchdog support:
+
+```ini
+[Service]
+WatchdogSec=30
+```
+
+mik will send periodic keepalive signals. If it stops responding, systemd will restart it.
+
+### Health Check Service
+
+Create `/etc/systemd/system/mik-healthcheck.service`:
+
+```ini
+[Unit]
+Description=mik Health Check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl -sf http://localhost:3000/health
+```
+
+Create `/etc/systemd/system/mik-healthcheck.timer`:
+
+```ini
+[Unit]
+Description=mik Health Check Timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable:
+
+```bash
+sudo systemctl enable --now mik-healthcheck.timer
+```
+
+## Log Configuration
+
+### Journal Settings
+
+View logs with different verbosity:
+
+```bash
+# Follow logs
+journalctl -u mik -f
+
+# Last 100 lines
+journalctl -u mik -n 100
+
+# Since boot
+journalctl -u mik -b
+
+# Time range
+journalctl -u mik --since "2025-01-01 00:00:00" --until "2025-01-01 12:00:00"
+
+# JSON output
+journalctl -u mik -o json
+```
+
+### Persistent Logs
+
+By default, journald may not persist logs across reboots. Enable persistence:
+
+```bash
+sudo mkdir -p /var/log/journal
+sudo systemctl restart systemd-journald
+```
+
+## Troubleshooting
+
+### Service Won't Start
+
+```bash
+# Check detailed status
+systemctl status mik -l
+
+# Check full logs
+journalctl -u mik -e
+
+# Verify binary exists
+ls -la /usr/local/bin/mik
+
+# Verify permissions
+ls -la /var/lib/mik/
+```
+
+### Permission Denied
+
+```bash
+# Check user can access files
+sudo -u mik ls /var/lib/mik/
+
+# Reset permissions
+sudo chown -R mik:mik /var/lib/mik
+sudo chmod 700 /var/lib/mik
+sudo chmod 644 /var/lib/mik/modules/*.wasm
+```
+
+### Port Already in Use
+
+```bash
+# Find what's using the port
+sudo ss -tlnp | grep 3000
+
+# Kill the process or change mik's port
+```
+
+### Memory Issues
+
+```bash
+# Check resource usage
+systemctl status mik
+cat /sys/fs/cgroup/system.slice/mik.service/memory.current
+
+# Check limits
+systemctl show mik -p MemoryMax
+```
+
+## Complete Example
+
+### Directory Structure
+
+```
+/var/lib/mik/
+├── modules/
+│   ├── api.wasm
+│   └── auth.wasm
+├── data/
+│   ├── state.redb
+│   └── sqlite.db
+└── mik.toml
+
+/etc/mik/
+├── mik.env
+└── daemon.toml
+
+/etc/systemd/system/
+└── mik.service
+```
+
+### Configuration Files
+
+`/var/lib/mik/mik.toml`:
+```toml
+[project]
+name = "production-api"
+
+[server]
+port = 3000
+modules = "modules/"
+cache_size = 100
+max_cache_mb = 512
+```
+
+`/etc/mik/mik.env`:
+```bash
+MIK_API_KEY=your-production-key
+RUST_LOG=info
+```
+
+## Next Steps
+
+- [Production Deployment](/guides/production) - Full production guide
+- [Monitoring & Observability](/guides/monitoring) - Metrics and logging
+- [Operations Runbook](/guides/runbook) - Troubleshooting guide

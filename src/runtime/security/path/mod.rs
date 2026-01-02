@@ -267,11 +267,11 @@ mod tests {
         // This is a valid path component since %2e is just a literal filename char
         assert!(result.is_ok());
 
-        // Mixed encoding: `..%2Fetc/passwd` has components `..%2Fetc` + `passwd`
-        // The `..%2Fetc` is a Normal component (weird filename), not ParentDir
-        // because `%2F` is a literal string, not a path separator
+        // Defense in depth: reject any component starting with ".."
+        // Even though `..%2Fetc` is technically a Normal component (not ParentDir),
+        // it's suspicious and could indicate an obfuscation attempt
         let result = sanitize_file_path("..%2Fetc/passwd");
-        assert!(result.is_ok());
+        assert_eq!(result, Err(PathTraversalError::EscapesBaseDirectory));
     }
 
     #[cfg(windows)]

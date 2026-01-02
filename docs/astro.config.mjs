@@ -50,6 +50,10 @@ export default defineConfig({
             { label: "Daemon Services", slug: "guides/daemon" },
             { label: "Scripts & Orchestration", slug: "guides/scripts" },
             { label: "Reliability Features", slug: "guides/reliability" },
+            { label: "Production Deployment", slug: "guides/production" },
+            { label: "Monitoring", slug: "guides/monitoring" },
+            { label: "Runbook", slug: "guides/runbook" },
+            { label: "systemd Setup", slug: "guides/systemd" },
           ],
         },
         {

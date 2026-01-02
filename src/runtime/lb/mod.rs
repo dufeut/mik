@@ -88,9 +88,6 @@ use crate::manifest::LbConfig;
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:3000";
 
 /// Configuration for the load balancer.
-///
-/// This is the legacy configuration struct for backward compatibility.
-/// For new code, prefer using `LoadBalancerBuilder` directly.
 #[derive(Debug, Clone)]
 pub struct LoadBalancerConfig {
     /// Address to listen on.

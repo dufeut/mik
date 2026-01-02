@@ -1,0 +1,15 @@
+[Unit]
+Description=mik Socket Activation
+Documentation=https://github.com/dufeut/mik
+
+[Socket]
+ListenStream=3000
+Accept=no
+ReusePort=yes
+
+# Socket options
+NoDelay=yes
+KeepAlive=yes
+
+[Install]
+WantedBy=sockets.target

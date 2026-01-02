@@ -1,0 +1,463 @@
+---
+title: Operations Runbook
+description: Troubleshooting guide for common mik issues
+---
+
+This runbook provides step-by-step procedures for diagnosing and resolving common operational issues.
+
+## Quick Diagnostics
+
+Before diving into specific issues, gather basic information:
+
+```bash
+# Check if mik is running
+pgrep -a mik
+
+# Check listening ports
+ss -tlnp | grep mik
+
+# View recent logs
+journalctl -u mik --since "10 minutes ago" -f
+
+# Check health endpoint
+curl -s http://localhost:3000/health | jq
+
+# Check metrics
+curl -s http://localhost:3000/metrics | head -50
+```
+
+---
+
+## Common Issues
+
+### High Latency
+
+**Symptoms**: Slow responses, P99 latency spikes, user complaints.
+
+**Diagnosis Steps**:
+
+1. Check circuit breaker state in metrics:
+   ```bash
+   curl -s http://localhost:3000/metrics | grep circuit_breaker
+   ```
+   If `mik_circuit_breaker_state` shows `1`, the circuit is open.
+
+2. Check AOT cache hit ratio:
+   ```bash
+   curl -s http://localhost:3000/metrics | grep cache
+   ```
+   Low hit ratio indicates frequent cold starts.
+
+3. Check for slow handlers:
+   ```bash
+   journalctl -u mik | jq 'select(.duration_ms > 1000)' | head -20
+   ```
+
+4. Check system resources:
+   ```bash
+   top -p $(pgrep mik)
+   iostat -x 1 5
+   ```
+
+**Resolution**:
+
+| Cause | Solution |
+|-------|----------|
+| Cold starts | Increase `cache_size` in mik.toml |
+| Circuit breaker open | Check downstream services, wait for recovery |
+| High CPU | Reduce `max_concurrent_requests` |
+| Disk I/O | Move AOT cache to faster storage |
+
+---
+
+### Out of Memory
+
+**Symptoms**: Process killed, OOM messages in dmesg, `Killed` in logs.
+
+**Diagnosis Steps**:
+
+1. Check memory metrics:
+   ```bash
+   curl -s http://localhost:3000/metrics | grep memory
+   ```
+
+2. Check system memory:
+   ```bash
+   free -h
+   dmesg | grep -i "out of memory"
+   ```
+
+3. Review module cache settings:
+   ```bash
+   grep -E "cache_size|max_cache_mb" /etc/mik/mik.toml
+   ```
+
+**Resolution**:
+
+Reduce memory usage in `mik.toml`:
+
+```toml
+[server]
+max_cache_mb = 128    # Reduce cache memory limit
+cache_size = 50       # Fewer cached modules
+max_concurrent_requests = 500  # Fewer simultaneous requests
+```
+
+For persistent issues:
+- Add swap space as a safety net
+- Increase container/VM memory
+- Split into multiple smaller instances
+
+---
+
+### Module Load Failures
+
+**Symptoms**: 500 errors, "Failed to instantiate" in logs, 404 for module routes.
+
+**Diagnosis Steps**:
+
+1. Verify module file exists:
+   ```bash
+   ls -la /var/lib/mik/modules/*.wasm
+   ```
+
+2. Check file permissions:
+   ```bash
+   stat /var/lib/mik/modules/mymodule.wasm
+   ```
+
+3. Validate WASM format:
+   ```bash
+   file /var/lib/mik/modules/mymodule.wasm
+   # Should say: WebAssembly (wasm) binary module
+   ```
+
+4. Check for AOT cache corruption:
+   ```bash
+   ls -la /var/lib/mik/modules/*.wasm.aot
+   ```
+
+5. Review logs for specific errors:
+   ```bash
+   journalctl -u mik | grep -i "instantiate\|module\|wasm" | tail -20
+   ```
+
+**Resolution**:
+
+| Cause | Solution |
+|-------|----------|
+| File not found | Deploy missing module |
+| Permission denied | `chmod 644 module.wasm` |
+| Invalid WASM | Rebuild with `mik build -rc` |
+| AOT cache stale | Delete `.wasm.aot` files, restart mik |
+| wasmtime version mismatch | Rebuild AOT cache with current version |
+
+Clear AOT cache:
+```bash
+rm /var/lib/mik/modules/*.wasm.aot
+systemctl restart mik
+```
+
+---
+
+### Authentication Failures
+
+**Symptoms**: 401/403 responses, "auth_failure" in audit logs.
+
+**Diagnosis Steps**:
+
+1. Check if API key is configured:
+   ```bash
+   grep MIK_API_KEY /etc/systemd/system/mik.service
+   ```
+
+2. Verify request includes correct header:
+   ```bash
+   # Test with key
+   curl -v -H "X-API-Key: your-key" http://localhost:9919/instances
+   ```
+
+3. Check audit logs:
+   ```bash
+   journalctl -u mik | jq 'select(.target == "audit")'
+   ```
+
+**Resolution**:
+
+| Cause | Solution |
+|-------|----------|
+| Missing header | Add `X-API-Key` header to requests |
+| Wrong key | Verify key matches `MIK_API_KEY` env var |
+| Key not set | Set `MIK_API_KEY` in systemd service |
+
+---
+
+### Connection Refused
+
+**Symptoms**: `curl: (7) Failed to connect`, service unreachable.
+
+**Diagnosis Steps**:
+
+1. Check if process is running:
+   ```bash
+   systemctl status mik
+   pgrep -a mik
+   ```
+
+2. Check listening ports:
+   ```bash
+   ss -tlnp | grep -E "3000|9919"
+   ```
+
+3. Check bind address:
+   ```bash
+   grep -E "HOST|port" /etc/mik/mik.toml
+   ```
+
+4. Check firewall:
+   ```bash
+   iptables -L -n | grep -E "3000|9919"
+   ```
+
+**Resolution**:
+
+| Cause | Solution |
+|-------|----------|
+| Process not running | `systemctl start mik` |
+| Wrong port | Check `mik.toml` port setting |
+| Bound to 127.0.0.1 | Set `HOST=0.0.0.0` for external access |
+| Firewall blocking | Open port in firewall rules |
+
+---
+
+### Circuit Breaker Tripped
+
+**Symptoms**: 503 responses, "circuit-open" errors.
+
+**Diagnosis Steps**:
+
+1. Check circuit state:
+   ```bash
+   curl -s http://localhost:3000/metrics | grep circuit
+   ```
+
+2. Identify failing module:
+   ```bash
+   journalctl -u mik | grep -i "circuit\|failure" | tail -20
+   ```
+
+3. Check downstream services:
+   ```bash
+   curl -s http://localhost:9919/health
+   ```
+
+**Resolution**:
+
+The circuit breaker opens after 5 consecutive failures and recovers after 30 seconds.
+
+1. Wait for automatic recovery (30s)
+2. Fix the root cause (downstream service, bad input, etc.)
+3. Monitor for recurring issues
+
+For testing, manually trigger a request to attempt recovery:
+```bash
+curl http://localhost:3000/run/failing-module/health
+```
+
+---
+
+### Disk Space Issues
+
+**Symptoms**: Write failures, "No space left on device" errors.
+
+**Diagnosis Steps**:
+
+1. Check disk usage:
+   ```bash
+   df -h /var/lib/mik
+   ```
+
+2. Find large files:
+   ```bash
+   du -sh /var/lib/mik/*
+   du -sh /var/lib/mik/modules/*.aot
+   ```
+
+3. Check log size:
+   ```bash
+   du -sh /var/log/mik/
+   ```
+
+**Resolution**:
+
+1. Clean AOT cache:
+   ```bash
+   mik cache clean    # Remove stale entries
+   # or
+   mik cache clear    # Clear all
+   ```
+
+2. Rotate logs:
+   ```bash
+   journalctl --vacuum-size=100M
+   ```
+
+3. Remove old logs:
+   ```bash
+   find /var/log/mik -name "*.log.*" -mtime +7 -delete
+   ```
+
+---
+
+## Health Checks
+
+### Endpoints
+
+| Endpoint | Purpose | Expected Response |
+|----------|---------|-------------------|
+| `/health` | Basic liveness | `{"status": "ready"}` |
+| `/metrics` | Prometheus metrics | Prometheus text format |
+
+### Health Check Script
+
+```bash
+#!/bin/bash
+set -e
+
+# Check HTTP health
+response=$(curl -sf http://localhost:3000/health)
+status=$(echo "$response" | jq -r '.status')
+
+if [ "$status" != "ready" ]; then
+    echo "Health check failed: $response"
+    exit 1
+fi
+
+echo "Health check passed"
+exit 0
+```
+
+### Kubernetes Probes
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 5
+  periodSeconds: 5
+```
+
+---
+
+## Log Analysis
+
+### Finding Errors
+
+```bash
+# Recent errors
+journalctl -u mik --since "1 hour ago" -p err
+
+# JSON structured search
+journalctl -u mik | jq 'select(.level == "ERROR")'
+
+# Specific module errors
+journalctl -u mik | jq 'select(.module == "auth" and .level == "ERROR")'
+```
+
+### Performance Analysis
+
+```bash
+# Slow requests (>1s)
+journalctl -u mik | jq 'select(.duration_ms > 1000)'
+
+# Request distribution by module
+journalctl -u mik | jq 'select(.message == "request_completed") | .module' | sort | uniq -c
+
+# Error rate by endpoint
+journalctl -u mik | jq 'select(.status >= 500) | .path' | sort | uniq -c | sort -rn
+```
+
+### Trace Correlation
+
+```bash
+# Find all logs for a specific trace
+journalctl -u mik | jq 'select(.span.trace_id == "abc123")'
+
+# Find requests taking longer than expected
+journalctl -u mik | jq 'select(.duration_ms > 500 and .message == "request_completed")'
+```
+
+---
+
+## Recovery Procedures
+
+### Full Service Restart
+
+```bash
+# Graceful restart
+systemctl restart mik
+
+# Force kill if unresponsive
+systemctl kill -s SIGKILL mik
+systemctl start mik
+```
+
+### Cache Reset
+
+```bash
+# Stop service
+systemctl stop mik
+
+# Clear AOT cache
+rm /var/lib/mik/modules/*.wasm.aot
+
+# Clear module cache
+mik cache clear
+
+# Restart
+systemctl start mik
+```
+
+### Daemon State Reset
+
+```bash
+# Stop all instances
+systemctl stop mik
+
+# Reset daemon state
+rm ~/.mik/state.redb
+
+# Restart
+systemctl start mik
+```
+
+---
+
+## Escalation Checklist
+
+Before escalating, ensure you have:
+
+- [ ] Service status (`systemctl status mik`)
+- [ ] Recent logs (last 100 lines)
+- [ ] Health endpoint response
+- [ ] Metrics snapshot
+- [ ] System resources (CPU, memory, disk)
+- [ ] Configuration file (`mik.toml`)
+- [ ] Timestamp when issue started
+- [ ] Any recent changes (deploys, config changes)
+
+---
+
+## Next Steps
+
+- [Monitoring & Observability](/guides/monitoring) - Set up metrics and alerts
+- [Production Deployment](/guides/production) - Deployment best practices
+- [systemd Service Setup](/guides/systemd) - Running as a system service

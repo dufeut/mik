@@ -1,0 +1,413 @@
+---
+title: Monitoring & Observability
+description: Setting up metrics, logging, and tracing for mik
+---
+
+mik provides comprehensive observability through Prometheus metrics, structured logging, and OpenTelemetry tracing.
+
+## Prometheus Metrics
+
+mik exposes metrics at `/metrics` in Prometheus format.
+
+### Key Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mik_http_requests_total` | Counter | Total HTTP requests by path and status |
+| `mik_http_request_duration_seconds` | Histogram | Request latency distribution |
+| `mik_wasm_execution_duration_seconds` | Histogram | WASM handler execution time |
+| `mik_module_cache_hits_total` | Counter | AOT cache hits |
+| `mik_module_cache_misses_total` | Counter | AOT cache misses |
+| `mik_circuit_breaker_state` | Gauge | Circuit breaker state (0=closed, 1=open, 2=half-open) |
+| `mik_active_requests` | Gauge | Currently processing requests |
+
+### Daemon Metrics (port 9919)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mik_instance_count` | Gauge | Running/stopped/crashed instances |
+| `mik_instance_uptime_seconds` | Gauge | Instance uptime |
+| `mik_kv_operations_total` | Counter | KV operations by type |
+| `mik_sql_queries_total` | Counter | SQL queries by type |
+| `mik_storage_operations_total` | Counter | Storage operations by type |
+| `mik_cron_executions_total` | Counter | Cron job executions |
+| `mik_cron_execution_duration_seconds` | Histogram | Cron job duration |
+
+### Prometheus Scrape Config
+
+```yaml
+scrape_configs:
+  - job_name: 'mik'
+    static_configs:
+      - targets: ['localhost:3000']
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: 'mik-daemon'
+    static_configs:
+      - targets: ['localhost:9919']
+    metrics_path: /metrics
+    scrape_interval: 15s
+```
+
+## Grafana Dashboard
+
+### Importing the Dashboard
+
+1. Open Grafana
+2. Navigate to Dashboards > Import
+3. Import from `examples/deploy/grafana/dashboard.json`
+
+### Key Panels
+
+**Request Overview**
+- Request rate (requests/second)
+- Error rate (4xx, 5xx responses)
+- Latency percentiles (P50, P95, P99)
+
+**WASM Execution**
+- Execution time histogram
+- Module-by-module breakdown
+- Timeout occurrences
+
+**Cache Performance**
+- Cache hit ratio
+- Cache size (entries and bytes)
+- Eviction rate
+
+**Reliability**
+- Circuit breaker states per module
+- Rate limiting rejections
+- Active connections
+
+### Example Grafana Queries
+
+```promql
+# Request rate by status
+sum by (status) (rate(mik_http_requests_total[5m]))
+
+# P99 latency
+histogram_quantile(0.99, rate(mik_http_request_duration_seconds_bucket[5m]))
+
+# Cache hit ratio
+sum(rate(mik_module_cache_hits_total[5m])) /
+(sum(rate(mik_module_cache_hits_total[5m])) + sum(rate(mik_module_cache_misses_total[5m])))
+
+# Circuit breaker open
+mik_circuit_breaker_state == 1
+```
+
+## Alerting
+
+### Recommended Alerts
+
+Create alert rules in Prometheus or Grafana:
+
+**High Error Rate**
+```yaml
+- alert: MikHighErrorRate
+  expr: |
+    sum(rate(mik_http_requests_total{status=~"5.."}[5m])) /
+    sum(rate(mik_http_requests_total[5m])) > 0.01
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "mik error rate above 1%"
+    description: "Error rate is {{ $value | humanizePercentage }}"
+```
+
+**High Latency**
+```yaml
+- alert: MikHighLatency
+  expr: |
+    histogram_quantile(0.99, rate(mik_http_request_duration_seconds_bucket[5m])) > 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "mik P99 latency above 1s"
+```
+
+**Circuit Breaker Open**
+```yaml
+- alert: MikCircuitBreakerOpen
+  expr: mik_circuit_breaker_state == 1
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Circuit breaker open for {{ $labels.module }}"
+```
+
+**Low Cache Hit Ratio**
+```yaml
+- alert: MikLowCacheHitRatio
+  expr: |
+    sum(rate(mik_module_cache_hits_total[5m])) /
+    (sum(rate(mik_module_cache_hits_total[5m])) + sum(rate(mik_module_cache_misses_total[5m]))) < 0.8
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Cache hit ratio below 80%"
+```
+
+## Structured Logging
+
+mik uses structured JSON logging via the `tracing` crate.
+
+### Log Format
+
+```json
+{
+  "timestamp": "2025-01-15T10:30:00.123456Z",
+  "level": "INFO",
+  "target": "mik::runtime",
+  "message": "Module loaded",
+  "module": "auth",
+  "duration_ms": 45,
+  "span": {
+    "request_id": "abc-123",
+    "trace_id": "def-456"
+  }
+}
+```
+
+### Log Levels
+
+| Level | Use Case |
+|-------|----------|
+| `ERROR` | Failures requiring immediate attention |
+| `WARN` | Potential issues (auth failures, timeouts, circuit breaker trips) |
+| `INFO` | Normal operations (module loads, requests) |
+| `DEBUG` | Detailed debugging (request details, cache operations) |
+| `TRACE` | Very verbose (WASM execution details) |
+
+### Configuring Log Level
+
+```bash
+# Set via environment variable
+RUST_LOG=info mik run
+
+# More granular control
+RUST_LOG=mik=debug,mik::runtime=trace mik run
+
+# Quiet mode (errors only)
+RUST_LOG=error mik run
+```
+
+### Log Rotation
+
+Configure in `mik.toml`:
+
+```toml
+[server]
+log_max_size_mb = 50    # Rotate when file reaches 50MB
+log_max_files = 10      # Keep 10 rotated files
+```
+
+### Shipping Logs
+
+**To Loki (via Promtail)**
+
+```yaml
+# promtail.yml
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: mik
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: mik
+          __path__: /var/log/mik/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            module: module
+            trace_id: span.trace_id
+      - labels:
+          level:
+          module:
+```
+
+**To Elasticsearch (via Filebeat)**
+
+```yaml
+# filebeat.yml
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/mik/*.log
+    json.keys_under_root: true
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "mik-%{+yyyy.MM.dd}"
+```
+
+## Distributed Tracing
+
+mik supports OpenTelemetry tracing with W3C Trace Context propagation.
+
+### Configuration
+
+Enable in `mik.toml`:
+
+```toml
+[tracing]
+service_name = "my-api"
+otlp_endpoint = "http://localhost:4317"
+```
+
+### Trace Structure
+
+```
+[HTTP Request]
+    |
+    +-- [Route Matching]
+    |
+    +-- [WASM Execution]
+    |       |
+    |       +-- [Module Load (if cache miss)]
+    |       |
+    |       +-- [Handler Invocation]
+    |
+    +-- [Response Serialization]
+```
+
+### Trace Context Propagation
+
+Incoming requests with `traceparent` header are linked to the parent trace:
+
+```bash
+curl -H "traceparent: 00-abc123-def456-01" http://localhost:3000/run/api/
+```
+
+Outbound HTTP calls from handlers automatically propagate trace context.
+
+### Jaeger Setup
+
+```yaml
+# docker-compose.yml
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # UI
+      - "4317:4317"    # OTLP gRPC
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  mik:
+    image: ghcr.io/dufeut/mik:latest
+    environment:
+      - RUST_LOG=info
+    volumes:
+      - ./mik.toml:/app/mik.toml
+```
+
+With `mik.toml`:
+
+```toml
+[tracing]
+service_name = "my-api"
+otlp_endpoint = "http://jaeger:4317"
+```
+
+### Grafana Tempo Setup
+
+```yaml
+services:
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+```
+
+## Observability Stack
+
+Complete observability setup with Docker Compose:
+
+```yaml
+services:
+  mik:
+    image: ghcr.io/dufeut/mik:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+    environment:
+      - RUST_LOG=info
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    volumes:
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+
+  tempo:
+    image: grafana/tempo:latest
+    ports:
+      - "4317:4317"
+```
+
+## Health Endpoints
+
+| Endpoint | Purpose | Response |
+|----------|---------|----------|
+| `/health` | Basic liveness | `{"status": "ready", ...}` |
+| `/metrics` | Prometheus metrics | Text format |
+
+### Health Response
+
+```json
+{
+  "status": "ready",
+  "timestamp": "2025-01-15T10:30:00Z",
+  "cache_size": 5,
+  "cache_capacity": 100,
+  "cache_bytes": 1048576,
+  "total_requests": 1000
+}
+```
+
+## Next Steps
+
+- [Operations Runbook](/guides/runbook) - Troubleshooting common issues
+- [Production Deployment](/guides/production) - Full deployment guide
+- [Reliability Features](/guides/reliability) - Circuit breaker, rate limiting

@@ -19,6 +19,9 @@ arbitrary = { version = "1", features = ["derive"] }
 # For JSON fuzzing
 serde_json = "1.0"
 
+# For TOML config fuzzing
+toml = "0.8"
+
 # For testing path operations
 tempfile = "3.24"
 uuid = "1.0"
@@ -82,6 +85,27 @@ bench = false
 [[bin]]
 name = "fuzz_sql_injection"
 path = "fuzz_targets/fuzz_sql_injection.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_config_parsing"
+path = "fuzz_targets/fuzz_config_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_http_request"
+path = "fuzz_targets/fuzz_http_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_wasm_loading"
+path = "fuzz_targets/fuzz_wasm_loading.rs"
 test = false
 doc = false
 bench = false

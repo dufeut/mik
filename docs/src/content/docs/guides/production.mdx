@@ -1,0 +1,303 @@
+---
+title: Production Deployment
+description: Complete guide to deploying mik in production environments
+---
+
+This guide covers everything needed to deploy mik in a production environment.
+
+## Pre-flight Checklist
+
+Before deploying to production:
+
+1. Build mik with release optimizations: `cargo build --release`
+2. Configure reverse proxy (nginx/Caddy) for TLS termination
+3. Set up monitoring and alerting
+4. Configure log aggregation
+5. Test health endpoints
+
+## System Requirements
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 2 cores | 4+ cores |
+| RAM | 512 MB | 2+ GB |
+| Disk | 1 GB | 10+ GB (for AOT cache) |
+
+### Memory Considerations
+
+- Each WASM module consumes memory when loaded
+- AOT-compiled modules are cached on disk (`.wasm.aot` files)
+- LRU cache evicts least-used modules when `max_cache_mb` is reached
+
+## Network Architecture
+
+:::tip
+Always deploy mik behind a reverse proxy for TLS termination, rate limiting, and request filtering.
+:::
+
+```
+[Client] --> [Reverse Proxy (nginx/Caddy)] --> [mik :3000] --> [Sidecars]
+                        |
+                  [TLS, Rate Limiting]
+```
+
+### Port Configuration
+
+| Port | Service | Access |
+|------|---------|--------|
+| 443 | Reverse proxy (HTTPS) | Public |
+| 3000 | mik HTTP server | Internal only |
+| 9919 | Daemon API | Internal only |
+
+## Security Hardening
+
+### API Key Authentication
+
+Always set a strong API key for daemon endpoints:
+
+```bash
+# Generate a strong API key
+export MIK_API_KEY="$(openssl rand -hex 32)"
+
+# Start with API key
+mik run --api-key "$MIK_API_KEY" myapp.wasm
+
+# Or for daemon mode
+mik dev
+```
+
+All daemon API requests must include the key:
+
+```bash
+curl -H "X-API-Key: $MIK_API_KEY" http://localhost:9919/instances
+```
+
+### File Permissions
+
+```bash
+# Restrict mik data directory
+chmod 700 /var/lib/mik
+
+# Protect configuration
+chmod 600 /etc/mik/mik.toml
+
+# Ensure WASM modules are read-only
+chmod 644 /var/lib/mik/modules/*.wasm
+```
+
+### Network Restrictions
+
+Limit outbound HTTP access in `mik.toml`:
+
+```toml
+[server]
+# Only allow specific hosts
+http_allowed = ["api.internal.example.com", "*.supabase.co"]
+
+# Or disable all outbound HTTP
+http_allowed = []
+```
+
+## Reverse Proxy Setup
+
+### nginx Configuration
+
+```nginx
+upstream mik {
+    server 127.0.0.1:3000;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+
+    ssl_certificate /etc/ssl/certs/api.example.com.pem;
+    ssl_certificate_key /etc/ssl/private/api.example.com.key;
+
+    # Security headers
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Rate limiting
+    limit_req zone=api burst=20 nodelay;
+
+    location / {
+        proxy_pass http://mik;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Timeouts
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    # Health check endpoint (no rate limiting)
+    location /health {
+        proxy_pass http://mik;
+        limit_req off;
+    }
+}
+```
+
+### Caddy Configuration
+
+```
+api.example.com {
+    reverse_proxy localhost:3000 {
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Rate limiting
+    rate_limit {
+        zone api {
+            key {remote_host}
+            events 100
+            window 1m
+        }
+    }
+}
+```
+
+## Production mik.toml
+
+```toml
+[project]
+name = "production-api"
+version = "1.0.0"
+
+[server]
+port = 3000
+modules = "modules/"
+cache_size = 100
+max_cache_mb = 512
+execution_timeout_secs = 30
+max_concurrent_requests = 2000
+max_per_module_requests = 50
+shutdown_timeout_secs = 60
+log_max_size_mb = 50
+log_max_files = 10
+http_allowed = ["*.internal.example.com"]
+
+[tracing]
+service_name = "production-api"
+otlp_endpoint = "http://tempo:4317"
+```
+
+## Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `PORT` | Server port | `3000` |
+| `HOST` | Bind address | `127.0.0.1` |
+| `RUST_LOG` | Log level | `info` |
+| `MIK_API_KEY` | Daemon API key | `<hex string>` |
+| `MIK_HOT_RELOAD` | Enable hot reload | `0` (disabled in prod) |
+
+## Deployment Patterns
+
+### Single Instance
+
+Simplest deployment for low-traffic services:
+
+```bash
+mik run --port 3000 /var/lib/mik/app.wasm
+```
+
+### Multiple Instances (Load Balanced)
+
+For horizontal scaling:
+
+```bash
+# Instance 1
+mik run --port 3001 app.wasm
+
+# Instance 2
+mik run --port 3002 app.wasm
+```
+
+nginx upstream:
+
+```nginx
+upstream mik {
+    least_conn;
+    server 127.0.0.1:3001;
+    server 127.0.0.1:3002;
+}
+```
+
+### Daemon Mode with Services
+
+For applications needing KV, SQL, or Storage:
+
+```bash
+# Starts daemon on 9919, app on 3000
+mik run --detach --name myapp --port 3000
+```
+
+## Health Checks
+
+Configure load balancer health checks:
+
+```bash
+# Basic liveness
+curl -sf http://localhost:3000/health
+
+# Readiness (checks module cache)
+curl -sf http://localhost:3000/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ready",
+  "cache_size": 5,
+  "cache_capacity": 100,
+  "total_requests": 1000
+}
+```
+
+## Graceful Shutdown
+
+mik handles SIGTERM gracefully:
+
+1. Stops accepting new connections
+2. Waits for in-flight requests (up to `shutdown_timeout_secs`)
+3. Closes connections cleanly
+4. Exits with code 0
+
+```bash
+# Graceful shutdown
+kill -TERM $(pgrep mik)
+```
+
+## Backup and Recovery
+
+### What to Back Up
+
+| Path | Contents | Frequency |
+|------|----------|-----------|
+| `/var/lib/mik/modules/` | WASM modules | On deploy |
+| `/var/lib/mik/data/` | Daemon state (redb, SQLite) | Daily |
+| `/etc/mik/mik.toml` | Configuration | On change |
+
+### Recovery Procedure
+
+1. Stop mik: `systemctl stop mik`
+2. Restore files from backup
+3. Verify permissions
+4. Start mik: `systemctl start mik`
+5. Verify health: `curl http://localhost:3000/health`
+
+## Next Steps
+
+- [systemd Service Setup](/guides/systemd) - Running as a system service
+- [Monitoring & Observability](/guides/monitoring) - Metrics and tracing
+- [Operations Runbook](/guides/runbook) - Troubleshooting guide

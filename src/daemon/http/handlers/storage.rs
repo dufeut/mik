@@ -27,7 +27,7 @@ pub(crate) async fn storage_list(
     metrics::record_storage_operation("list", None);
     let storage = get_storage(&state).await?;
     let mut objects: Vec<StorageObjectInfo> = storage
-        .list_objects_async(query.prefix)
+        .list_objects(query.prefix.as_deref())
         .await?
         .into_iter()
         .map(StorageObjectInfo::from)
@@ -48,7 +48,7 @@ pub(crate) async fn storage_get(
 ) -> Result<impl IntoResponse, AppError> {
     let storage = get_storage(&state).await?;
     let (data, meta) = storage
-        .get_object_async(path.clone())
+        .get_object(&path)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Object '{path}' not found")))?;
 
@@ -75,7 +75,7 @@ pub(crate) async fn storage_put(
         .map(String::from);
 
     storage
-        .put_object_async(path, body.to_vec(), content_type)
+        .put_object(&path, &body, content_type.as_deref())
         .await?;
     Ok(StatusCode::CREATED)
 }
@@ -87,7 +87,7 @@ pub(crate) async fn storage_delete(
 ) -> Result<StatusCode, AppError> {
     metrics::record_storage_operation("delete", None);
     let storage = get_storage(&state).await?;
-    storage.delete_object_async(path).await?;
+    storage.delete_object(&path).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -99,7 +99,7 @@ pub(crate) async fn storage_head(
     metrics::record_storage_operation("head", None);
     let storage = get_storage(&state).await?;
     let meta = storage
-        .head_object_async(path.clone())
+        .head_object(&path)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Object '{path}' not found")))?;
 

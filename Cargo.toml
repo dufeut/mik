@@ -178,7 +178,11 @@ tower = { version = "0.5", features = [
     "timeout",
     "retry",
 ] }
+tower-http = { version = "0.6", features = ["timeout", "cors"] }
 hyper-timeout = "0.5"
+
+# Security: constant-time comparison for API keys (prevents timing attacks)
+subtle = "2"
 async-trait = "0.1"
 dashmap = "6.1.0"
 
@@ -210,6 +214,26 @@ harness = false
 [[bench]]
 name = "runtime_bench"
 harness = false
+
+[[bench]]
+name = "http_latency"
+harness = false
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "module_loading"
+harness = false
+
+# =============================================================================
+# Lints Configuration
+# =============================================================================
+
+[lints.rust]
+# Allow loom cfg for concurrency testing
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 # =============================================================================
 # Release Profile - Optimized for production

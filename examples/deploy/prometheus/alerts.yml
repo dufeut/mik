@@ -1,0 +1,60 @@
+groups:
+  - name: mik
+    rules:
+      # High error rate
+      - alert: MikHighErrorRate
+        expr: |
+          sum(rate(mik_http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(mik_http_requests_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error rate on mik
+          description: Error rate is {{ $value | humanizePercentage }} over the last 5 minutes
+
+      # High latency
+      - alert: MikHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(mik_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High latency on mik
+          description: P99 latency is {{ $value | humanizeDuration }}
+
+      # Circuit breaker open
+      - alert: MikCircuitBreakerOpen
+        expr: mik_circuit_breaker_state{state="open"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Circuit breaker is open
+          description: Circuit breaker for {{ $labels.module }} is open
+
+      # Low cache hit ratio
+      - alert: MikLowCacheHitRatio
+        expr: |
+          sum(rate(mik_module_cache_hits_total[5m]))
+          / (sum(rate(mik_module_cache_hits_total[5m]))
+             + sum(rate(mik_module_cache_misses_total[5m]))) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Low AOT cache hit ratio
+          description: Cache hit ratio is {{ $value | humanizePercentage }}
+
+      # Instance down
+      - alert: MikInstanceDown
+        expr: up{job="mik"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: mik instance is down
+          description: mik instance {{ $labels.instance }} is not responding

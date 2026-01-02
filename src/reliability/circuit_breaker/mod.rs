@@ -36,7 +36,10 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-// Re-export public types for backward compatibility
+#[cfg(test)]
+mod property_tests;
+
+// Re-export public types for convenience
 pub use config::CircuitBreakerConfig;
 pub use error::{CircuitOpenError, CircuitOpenReason};
 pub use state::CircuitState;

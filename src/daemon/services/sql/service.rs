@@ -139,26 +139,4 @@ impl SqlService {
     ) -> Result<Vec<usize>> {
         self.backend.execute_batch_atomic(statements).await
     }
-
-    // ========================================================================
-    // Legacy methods for backwards compatibility
-    // ========================================================================
-
-    /// Legacy async query method.
-    pub async fn query_async(&self, sql: String, params: Vec<Value>) -> Result<Vec<Row>> {
-        self.query(&sql, &params).await
-    }
-
-    /// Legacy async execute method.
-    pub async fn execute_async(&self, sql: String, params: Vec<Value>) -> Result<usize> {
-        self.execute(&sql, &params).await
-    }
-
-    /// Legacy async batch atomic method.
-    pub async fn execute_batch_atomic_async(
-        &self,
-        statements: Vec<(String, Vec<Value>)>,
-    ) -> Result<Vec<usize>> {
-        self.execute_batch_atomic(statements).await
-    }
 }

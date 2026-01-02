@@ -139,38 +139,4 @@ impl StorageService {
     pub async fn list_objects(&self, prefix: Option<&str>) -> Result<Vec<ObjectMeta>> {
         self.backend.list(prefix).await
     }
-
-    // ========================================================================
-    // Legacy methods for backwards compatibility
-    // ========================================================================
-
-    /// Legacy async put method.
-    pub async fn put_object_async(
-        &self,
-        path: String,
-        data: Vec<u8>,
-        content_type: Option<String>,
-    ) -> Result<ObjectMeta> {
-        self.put_object(&path, &data, content_type.as_deref()).await
-    }
-
-    /// Legacy async get method.
-    pub async fn get_object_async(&self, path: String) -> Result<Option<(Vec<u8>, ObjectMeta)>> {
-        self.get_object(&path).await
-    }
-
-    /// Legacy async delete method.
-    pub async fn delete_object_async(&self, path: String) -> Result<bool> {
-        self.delete_object(&path).await
-    }
-
-    /// Legacy async head method.
-    pub async fn head_object_async(&self, path: String) -> Result<Option<ObjectMeta>> {
-        self.head_object(&path).await
-    }
-
-    /// Legacy async list method.
-    pub async fn list_objects_async(&self, prefix: Option<String>) -> Result<Vec<ObjectMeta>> {
-        self.list_objects(prefix.as_deref()).await
-    }
 }

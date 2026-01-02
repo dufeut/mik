@@ -40,7 +40,7 @@ mod manifest;
 mod scheduler;
 mod types;
 
-// Re-export public API for backward compatibility
+// Re-export public API for convenience
 pub use manifest::parse_schedules_from_manifest;
 pub use scheduler::CronScheduler;
 pub use types::{JobExecution, ScheduleConfig};
