@@ -9,7 +9,9 @@ pub mod http;
 pub mod metrics;
 #[cfg(feature = "otlp")]
 pub mod otlp;
+pub mod paths;
 pub mod process;
 pub mod services;
+pub mod startup;
 pub mod state;
 pub mod watch;

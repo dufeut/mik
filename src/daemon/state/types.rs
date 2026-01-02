@@ -46,3 +46,24 @@ pub struct Instance {
     #[serde(default)]
     pub last_restart_at: Option<DateTime<Utc>>,
 }
+
+impl Instance {
+    /// Create a new running instance with default values.
+    ///
+    /// Sets status to `Running`, `started_at` to now, and initializes
+    /// other fields with sensible defaults.
+    pub fn new(name: impl Into<String>, port: u16, pid: u32, config: PathBuf) -> Self {
+        Self {
+            name: name.into(),
+            port,
+            pid,
+            status: Status::Running,
+            config,
+            started_at: Utc::now(),
+            modules: vec![],
+            auto_restart: false,
+            restart_count: 0,
+            last_restart_at: None,
+        }
+    }
+}

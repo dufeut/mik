@@ -192,3 +192,11 @@ pub mod daemon;
 /// - [`utils::format_duration`] - Human-readable durations
 /// - [`utils::get_cargo_name`] - Extract project name from Cargo.toml
 pub mod utils;
+
+/// UI utilities for consistent terminal output formatting.
+///
+/// Provides shared formatting functions for error messages and status output:
+/// - [`ui::print_error_box`] - Print formatted error boxes
+/// - [`ui::print_error_box_from_output`] - Print errors from command output
+/// - [`ui::print_error_box_with_hints`] - Print errors with troubleshooting hints
+pub mod ui;

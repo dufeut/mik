@@ -5,19 +5,14 @@
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use std::path::PathBuf;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
 use crate::daemon::config::DaemonConfig;
+use crate::daemon::paths::{get_daemon_pid, get_state_path};
 use crate::daemon::process::{self, SpawnConfig};
+use crate::daemon::startup::ensure_daemon_running;
 use crate::daemon::state::{Instance, StateStore, Status};
-
-/// Default state database path: ~/.mik/state.redb
-fn get_state_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Failed to get home directory")?;
-    Ok(home.join(".mik").join("state.redb"))
-}
 
 /// Start the daemon for process management and scheduling.
 ///
@@ -145,17 +140,6 @@ fn check_daemon_auto_exit(store: &StateStore) -> Result<()> {
     Ok(())
 }
 
-/// Get daemon PID if running.
-fn get_daemon_pid() -> Option<u32> {
-    let state_path = get_state_path().ok()?;
-    let daemon_pid_path = state_path.parent()?.join("daemon.pid");
-    std::fs::read_to_string(daemon_pid_path)
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
-}
-
 /// Run instance in detached mode with auto-daemon.
 ///
 /// Auto-starts daemon if not running, then creates the instance.
@@ -200,19 +184,7 @@ pub async fn run_detached(name: &str, port: u16) -> Result<()> {
     let info = process::spawn_instance(&spawn_config)?;
 
     // Save instance state
-    let instance = Instance {
-        name: name.to_string(),
-        port,
-        pid: info.pid,
-        status: Status::Running,
-        config: config_path.clone(),
-        started_at: Utc::now(),
-        modules: vec![],
-        auto_restart: false,
-        restart_count: 0,
-        last_restart_at: None,
-    };
-
+    let instance = Instance::new(name, port, info.pid, config_path.clone());
     store.save_instance(&instance)?;
 
     println!("Instance '{}' started (PID: {})", name, info.pid);
@@ -224,60 +196,6 @@ pub async fn run_detached(name: &str, port: u16) -> Result<()> {
     println!("  mik stop {name}   # Stop instance");
 
     Ok(())
-}
-
-/// Ensure daemon is running, auto-start if not.
-async fn ensure_daemon_running() -> Result<()> {
-    const DAEMON_PORT: u16 = 9919;
-
-    // Check if daemon is already running
-    if is_daemon_running(DAEMON_PORT).await {
-        return Ok(());
-    }
-
-    println!("Starting daemon...");
-
-    // Get path to mik executable
-    let mik_exe = std::env::current_exe()?;
-
-    // Spawn daemon in background
-    let state_path = get_state_path()?;
-    let daemon_log = state_path.parent().unwrap().join("logs").join("daemon.log");
-    std::fs::create_dir_all(daemon_log.parent().unwrap())?;
-
-    let log_file = std::fs::File::create(&daemon_log)?;
-
-    let child = std::process::Command::new(&mik_exe)
-        .args(["daemon", "--port", &DAEMON_PORT.to_string()])
-        .stdout(log_file.try_clone()?)
-        .stderr(log_file)
-        .spawn()
-        .context("Failed to start daemon")?;
-
-    // Save daemon PID
-    let daemon_pid_path = state_path.parent().unwrap().join("daemon.pid");
-    std::fs::write(&daemon_pid_path, child.id().to_string())?;
-
-    // Wait for daemon to be ready
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if is_daemon_running(DAEMON_PORT).await {
-            println!("Daemon started (PID: {})", child.id());
-            return Ok(());
-        }
-    }
-
-    anyhow::bail!("Daemon failed to start within 5 seconds")
-}
-
-/// Check if daemon is running by trying to connect.
-async fn is_daemon_running(port: u16) -> bool {
-    reqwest::Client::new()
-        .get(format!("http://127.0.0.1:{port}/health"))
-        .timeout(Duration::from_millis(500))
-        .send()
-        .await
-        .is_ok()
 }
 
 /// List all tracked WASM instances.

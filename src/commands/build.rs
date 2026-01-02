@@ -16,6 +16,7 @@ use std::process::Command;
 
 use super::check_tool;
 use crate::manifest::{Dependency, Manifest};
+use crate::ui;
 use crate::utils::{format_bytes, get_cargo_name};
 
 /// Progress spinner tick interval in milliseconds.
@@ -139,7 +140,7 @@ fn build_rust(name: &str, release: bool) -> Result<(PathBuf, PathBuf)> {
     spinner.finish_and_clear();
 
     if !output.status.success() {
-        print_build_error(&output, "Rust");
+        ui::print_error_box_from_output("Rust Build Failed", &output);
         bail!("Rust compilation failed");
     }
 
@@ -245,7 +246,7 @@ fn build_typescript(name: &str) -> Result<(PathBuf, PathBuf)> {
     spinner.finish_and_clear();
 
     if !output.status.success() {
-        print_build_error(&output, "TypeScript");
+        ui::print_error_box_from_output("TypeScript Build Failed", &output);
         bail!("TypeScript build failed");
     }
 
@@ -278,25 +279,6 @@ fn create_spinner(msg: &str) -> ProgressBar {
     spinner.set_message(msg.to_string());
     spinner.enable_steady_tick(std::time::Duration::from_millis(SPINNER_TICK_INTERVAL_MS));
     spinner
-}
-
-/// Print build error with helpful information.
-fn print_build_error(output: &std::process::Output, language: &str) {
-    eprintln!("\n{}", "=".repeat(60));
-    eprintln!("{language} Build Failed");
-    eprintln!("{}", "=".repeat(60));
-
-    if !output.stderr.is_empty()
-        && let Ok(stderr) = String::from_utf8(output.stderr.clone())
-    {
-        eprintln!("\n{stderr}");
-    }
-
-    if !output.stdout.is_empty()
-        && let Ok(stdout) = String::from_utf8(output.stdout.clone())
-    {
-        eprintln!("{stdout}");
-    }
 }
 
 /// Package the built component to dist/ folder with tar.gz.
@@ -614,36 +596,16 @@ fn run_wac_compose(wac_args: &[String]) -> Result<std::process::Output> {
 
 /// Print detailed composition error with troubleshooting hints.
 fn print_composition_error(output: &std::process::Output) {
-    eprintln!("\n{}", "=".repeat(60));
-    eprintln!("Composition Failed");
-    eprintln!("{}", "=".repeat(60));
-
-    if !output.stderr.is_empty()
-        && let Ok(stderr) = String::from_utf8(output.stderr.clone())
-    {
-        eprintln!("\n{stderr}");
-    }
-
-    if !output.stdout.is_empty()
-        && let Ok(stdout) = String::from_utf8(output.stdout.clone())
-    {
-        eprintln!("{stdout}");
-    }
-
-    eprintln!("\n{}", "=".repeat(60));
-    eprintln!("Common Issues:");
-    eprintln!("{}", "=".repeat(60));
-    eprintln!("\n1. Incompatible WIT interfaces:");
-    eprintln!("   Ensure all components export/import matching interfaces");
-    eprintln!("\n2. Missing dependency components:");
-    eprintln!("   Run 'mik pull' to download dependencies from registry");
-    eprintln!("\n3. Invalid component format:");
-    eprintln!("   Verify all .wasm files are valid WASI components:");
-    eprintln!("   wasm-tools validate component.wasm");
-    eprintln!("\n4. Dependency version mismatch:");
-    eprintln!("   Check mik.toml dependency versions match built components");
-    eprintln!("\nFor debugging, inspect components with:");
-    eprintln!("  wasm-tools component wit <component.wasm>\n");
+    ui::print_error_box_with_hints(
+        "Composition Failed",
+        output,
+        &[
+            "Incompatible WIT interfaces:\n   Ensure all components export/import matching interfaces",
+            "Missing dependency components:\n   Run 'mik pull' to download dependencies from registry",
+            "Invalid component format:\n   Verify all .wasm files are valid WASI components:\n   wasm-tools validate component.wasm",
+            "Dependency version mismatch:\n   Check mik.toml dependency versions match built components\n\nFor debugging, inspect components with:\n  wasm-tools component wit <component.wasm>",
+        ],
+    );
 }
 
 /// Compose the main component with all dependencies from mik.toml.

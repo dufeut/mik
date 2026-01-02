@@ -29,6 +29,7 @@ mod manifest;
 mod registry;
 mod reliability;
 mod runtime;
+mod ui;
 mod utils;
 
 const AFTER_HELP: &str = "\
