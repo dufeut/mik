@@ -17,3 +17,33 @@ pub(crate) use instances::{
 pub(crate) use kv::{kv_delete, kv_get, kv_list, kv_set};
 pub(crate) use sql::{sql_batch, sql_execute, sql_query};
 pub(crate) use storage::{storage_delete, storage_get, storage_head, storage_list, storage_put};
+
+/// Macro to generate service availability helper functions.
+///
+/// Each service handler needs a helper function that checks if the service
+/// is enabled and returns 503 Service Unavailable if not.
+///
+/// # Usage
+///
+/// ```ignore
+/// get_service!(get_kv, kv, KvStore, "KV");
+/// get_service!(get_sql, sql, SqlService, "SQL");
+/// get_service!(get_storage, storage, StorageService, "Storage");
+/// ```
+macro_rules! get_service {
+    ($fn_name:ident, $field:ident, $service_type:ty, $service_name:expr) => {
+        async fn $fn_name(
+            state: &super::super::SharedState,
+        ) -> Result<$service_type, super::super::AppError> {
+            let state = state.read().await;
+            state.$field.clone().ok_or_else(|| {
+                super::super::AppError::ServiceUnavailable(format!(
+                    "{} service is disabled. Enable it in ~/.mik/daemon.toml",
+                    $service_name
+                ))
+            })
+        }
+    };
+}
+
+pub(crate) use get_service;

@@ -16,16 +16,10 @@ use super::super::{
         SqlQueryResponse,
     },
 };
+use super::get_service;
 
-/// Helper to get SQL service or return 503 if disabled.
-async fn get_sql(state: &SharedState) -> Result<SqlService, AppError> {
-    let state = state.read().await;
-    state.sql.clone().ok_or_else(|| {
-        AppError::ServiceUnavailable(
-            "SQL service is disabled. Enable it in ~/.mik/daemon.toml".to_string(),
-        )
-    })
-}
+// Generate the get_sql helper using the shared macro
+get_service!(get_sql, sql, SqlService, "SQL");
 
 // =============================================================================
 // Conversion Helpers

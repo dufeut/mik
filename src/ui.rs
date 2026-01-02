@@ -1,9 +1,46 @@
 //! UI utilities for consistent terminal output formatting.
 //!
-//! Provides shared formatting functions for error messages and status output.
+//! Provides shared formatting functions for error messages, spinners, and status output.
+
+use indicatif::{ProgressBar, ProgressStyle};
+use std::time::Duration;
 
 /// Width of error box separators.
 const ERROR_BOX_WIDTH: usize = 60;
+
+/// Default spinner tick interval in milliseconds.
+const SPINNER_TICK_MS: u64 = 100;
+
+// =============================================================================
+// Spinner Utilities
+// =============================================================================
+
+/// Create a spinner with the given message.
+///
+/// Returns a cyan-colored spinner that ticks every 100ms.
+///
+/// # Example
+///
+/// ```ignore
+/// let spinner = create_spinner("Building component...");
+/// // ... do work ...
+/// spinner.finish_and_clear();
+/// ```
+pub fn create_spinner(msg: &str) -> ProgressBar {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+    );
+    spinner.set_message(msg.to_string());
+    spinner.enable_steady_tick(Duration::from_millis(SPINNER_TICK_MS));
+    spinner
+}
+
+// =============================================================================
+// Error Box Utilities
+// =============================================================================
 
 /// Print an error box with a title and optional stderr/stdout content.
 ///

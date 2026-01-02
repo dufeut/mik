@@ -11,16 +11,10 @@ use axum::{
 
 use super::super::types::{KvGetResponse, KvListQuery, KvListResponse, KvSetRequest};
 use super::super::{AppError, SharedState, metrics};
+use super::get_service;
 
-/// Helper to get KV store or return 503 if disabled.
-async fn get_kv(state: &SharedState) -> Result<crate::daemon::services::kv::KvStore, AppError> {
-    let state = state.read().await;
-    state.kv.clone().ok_or_else(|| {
-        AppError::ServiceUnavailable(
-            "KV service is disabled. Enable it in ~/.mik/daemon.toml".to_string(),
-        )
-    })
-}
+// Generate the get_kv helper using the shared macro
+get_service!(get_kv, kv, crate::daemon::services::kv::KvStore, "KV");
 
 /// GET /kv - List all keys with optional prefix filter.
 pub(crate) async fn kv_list(

@@ -1,6 +1,8 @@
 //! Shared utility functions.
 
+use anyhow::{Context, Result};
 use std::fs;
+use std::path::PathBuf;
 
 /// Get project name from Cargo.toml in the current directory.
 ///
@@ -86,6 +88,65 @@ pub fn format_duration(duration: chrono::Duration) -> String {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     } else {
         format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
+    }
+}
+
+// =============================================================================
+// Project Configuration Helpers
+// =============================================================================
+
+/// Get the mik.toml config path in the current directory.
+///
+/// Returns the path to `mik.toml` in the current working directory.
+#[allow(dead_code)]
+pub fn get_config_path() -> Result<PathBuf> {
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    Ok(cwd.join("mik.toml"))
+}
+
+/// Get the working directory (current directory).
+#[allow(dead_code)]
+pub fn get_working_dir() -> Result<PathBuf> {
+    std::env::current_dir().context("Failed to get current directory")
+}
+
+/// Require mik.toml to exist in the current directory.
+///
+/// Returns the path to mik.toml if it exists, otherwise returns an error.
+#[allow(dead_code)]
+pub fn require_mik_toml() -> Result<PathBuf> {
+    let config_path = get_config_path()?;
+    if !config_path.exists() {
+        anyhow::bail!("No mik.toml found. Run 'mik new' to create a project.");
+    }
+    Ok(config_path)
+}
+
+/// Extract filename from a path, with optional suffix stripping.
+///
+/// Useful for extracting component/module names from paths.
+///
+/// # Example
+///
+/// ```ignore
+/// extract_name_from_path("modules/router.wasm", Some(".wasm"))  // => Some("router")
+/// extract_name_from_path("/path/to/my-repo.git", Some(".git"))  // => Some("my-repo")
+/// ```
+#[allow(dead_code)]
+pub fn extract_name_from_path(path: &str, strip_suffix: Option<&str>) -> Option<String> {
+    let path = std::path::Path::new(path);
+    let name = path.file_name()?.to_str()?;
+
+    let name = if let Some(suffix) = strip_suffix {
+        name.strip_suffix(suffix).unwrap_or(name)
+    } else {
+        name
+    };
+
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
     }
 }
 

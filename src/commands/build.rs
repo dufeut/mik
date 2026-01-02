@@ -8,20 +8,15 @@
 use anyhow::{Context, Result, bail};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::check_tool;
+use super::{check_tool, require_tool, require_tool_with_info};
 use crate::manifest::{Dependency, Manifest};
 use crate::ui;
 use crate::utils::{format_bytes, get_cargo_name};
-
-/// Progress spinner tick interval in milliseconds.
-/// Controls how frequently the spinner animation updates (100ms = 10 FPS).
-const SPINNER_TICK_INTERVAL_MS: u64 = 100;
 
 /// Normalize language string to canonical form.
 fn normalize_language(lang: &str) -> &'static str {
@@ -113,13 +108,7 @@ fn build_rust(name: &str, release: bool) -> Result<(PathBuf, PathBuf)> {
     }
 
     // Check for cargo-component
-    if check_tool("cargo-component").is_err() {
-        eprintln!("\nError: cargo-component not found\n");
-        eprintln!("cargo-component is required to build Rust WASI components.");
-        eprintln!("\nInstall with:");
-        eprintln!("  cargo install cargo-component");
-        bail!("Missing required tool: cargo-component");
-    }
+    require_tool("cargo-component", "cargo install cargo-component")?;
 
     // Build with cargo-component
     let mut args = vec!["component", "build", "--target", "wasm32-wasip2"];
@@ -130,7 +119,7 @@ fn build_rust(name: &str, release: bool) -> Result<(PathBuf, PathBuf)> {
         println!("Mode: debug");
     }
 
-    let spinner = create_spinner("Building component...");
+    let spinner = ui::create_spinner("Building component...");
 
     let output = Command::new("cargo")
         .args(&args)
@@ -236,7 +225,7 @@ fn build_typescript(name: &str) -> Result<(PathBuf, PathBuf)> {
     }
 
     // Run npm build
-    let spinner = create_spinner("Building TypeScript component...");
+    let spinner = ui::create_spinner("Building TypeScript component...");
 
     let output = npm_command()
         .args(npm_args(&["run", "build"]))
@@ -267,19 +256,6 @@ fn build_typescript(name: &str) -> Result<(PathBuf, PathBuf)> {
 // =============================================================================
 // Helper functions
 // =============================================================================
-
-/// Create a spinner with the given message.
-fn create_spinner(msg: &str) -> ProgressBar {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
-    );
-    spinner.set_message(msg.to_string());
-    spinner.enable_steady_tick(std::time::Duration::from_millis(SPINNER_TICK_INTERVAL_MS));
-    spinner
-}
 
 /// Package the built component to dist/ folder with tar.gz.
 fn package_to_dist(wasm_path: &Path, name: &str, release: bool, composed: bool) -> Result<()> {
@@ -382,7 +358,7 @@ async fn compose_http_handler(
 
     println!("  Bridge: {}", bridge.display());
 
-    let spinner = create_spinner("Composing with bridge...");
+    let spinner = ui::create_spinner("Composing with bridge...");
 
     // Compose bridge with handler
     // wac plug bridge.wasm --plug handler.wasm -o service.wasm
@@ -491,7 +467,7 @@ async fn download_bridge() -> Result<PathBuf> {
     // Create directory if needed
     fs::create_dir_all(&tools_dir).context("Failed to create ~/.mik/tools/bridge directory")?;
 
-    let spinner = create_spinner("Downloading bridge from registry...");
+    let spinner = ui::create_spinner("Downloading bridge from registry...");
 
     // Use pull_oci from pull module
     match super::pull::pull_oci(BRIDGE_OCI_REF, &output_path).await {
@@ -529,21 +505,16 @@ async fn download_bridge() -> Result<PathBuf> {
 
 /// Check that wac tool is available, printing helpful error if not.
 fn check_wac_available() -> Result<()> {
-    if check_tool("wac").is_err() {
-        eprintln!("\nError: wac not found\n");
-        eprintln!("wac is required for component composition.");
-        eprintln!("\nInstall with:");
-        eprintln!("  cargo install wac-cli");
-        eprintln!("\nFor more information, visit:");
-        eprintln!("  https://github.com/bytecodealliance/wac");
-        anyhow::bail!("Missing required tool: wac");
-    }
-    Ok(())
+    require_tool_with_info(
+        "wac",
+        "cargo install wac-cli",
+        Some("https://github.com/bytecodealliance/wac"),
+    )
 }
 
 /// Collect dependency paths from manifest, returning found paths.
 fn collect_dependency_paths(manifest: &Manifest) -> Vec<String> {
-    let spinner = create_spinner("Collecting dependencies...");
+    let spinner = ui::create_spinner("Collecting dependencies...");
 
     let mut dep_paths: Vec<String> = Vec::new();
 
@@ -583,7 +554,7 @@ fn run_wac_compose(wac_args: &[String]) -> Result<std::process::Output> {
     println!();
     println!("Running: wac {}", wac_args.join(" "));
 
-    let spinner = create_spinner("Composing components...");
+    let spinner = ui::create_spinner("Composing components...");
 
     let output = Command::new("wac")
         .args(wac_args)
@@ -773,7 +744,7 @@ fn optimize_component(wasm_path: &Path, size_before: u64) -> Result<()> {
         return Ok(());
     }
 
-    let spinner = create_spinner("Stripping component (removing debug info)...");
+    let spinner = ui::create_spinner("Stripping component (removing debug info)...");
 
     // Run wasm-tools strip --all (removes names, debug info, custom sections)
     let output = Command::new("wasm-tools")
@@ -808,7 +779,7 @@ fn optimize_core_module(wasm_path: &Path, size_before: u64) -> Result<()> {
         return Ok(());
     }
 
-    let spinner = create_spinner("Optimizing WASM for size...");
+    let spinner = ui::create_spinner("Optimizing WASM for size...");
 
     // Run wasm-opt -Oz (optimize for size) in-place
     let output = Command::new("wasm-opt")

@@ -43,6 +43,40 @@ pub fn check_tool(name: &str) -> Result<()> {
     }
 }
 
+/// Require a tool to be available, printing install instructions if not found.
+///
+/// This is a higher-level helper that prints formatted error messages with
+/// install instructions before returning an error.
+///
+/// # Example
+///
+/// ```ignore
+/// require_tool("cargo-component", "cargo install cargo-component")?;
+/// require_tool_with_info("wac", "cargo install wac-cli", Some("https://github.com/bytecodealliance/wac"))?;
+/// ```
+pub fn require_tool(name: &str, install_cmd: &str) -> Result<()> {
+    require_tool_with_info(name, install_cmd, None)
+}
+
+/// Require a tool with optional additional info URL.
+pub fn require_tool_with_info(name: &str, install_cmd: &str, info_url: Option<&str>) -> Result<()> {
+    if check_tool(name).is_ok() {
+        return Ok(());
+    }
+
+    eprintln!("\nError: {name} not found\n");
+    eprintln!("{name} is required for this operation.");
+    eprintln!("\nInstall with:");
+    eprintln!("  {install_cmd}");
+
+    if let Some(url) = info_url {
+        eprintln!("\nFor more information, visit:");
+        eprintln!("  {url}");
+    }
+
+    anyhow::bail!("Missing required tool: {name}")
+}
+
 /// Run a command and capture output
 #[allow(dead_code)]
 pub fn run_command(program: &str, args: &[&str]) -> Result<()> {

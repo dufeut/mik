@@ -8,12 +8,12 @@ mod errors;
 mod types;
 
 use anyhow::{Context, Result};
-use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::manifest::Manifest;
 use crate::registry;
+use crate::ui;
 
 use archive::create_archive;
 use discovery::{find_component, find_static_dir, find_wit_dir};
@@ -63,14 +63,7 @@ pub fn execute(tag: Option<&str>, dry_run: bool) -> Result<()> {
     fs::create_dir_all("target")?;
     let archive_path = Path::new("target").join(format!("{name}-{version}.tar.gz"));
 
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message("Creating archive...");
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+    let spinner = ui::create_spinner("Creating archive...");
 
     println!("\nCreating archive: {}", archive_path.display());
     create_archive(

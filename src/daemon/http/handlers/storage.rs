@@ -14,16 +14,10 @@ use crate::daemon::services::storage::StorageService;
 
 use super::super::types::{StorageListQuery, StorageListResponse, StorageObjectInfo};
 use super::super::{AppError, SharedState, metrics};
+use super::get_service;
 
-/// Helper to get Storage service or return 503 if disabled.
-async fn get_storage(state: &SharedState) -> Result<StorageService, AppError> {
-    let state = state.read().await;
-    state.storage.clone().ok_or_else(|| {
-        AppError::ServiceUnavailable(
-            "Storage service is disabled. Enable it in ~/.mik/daemon.toml".to_string(),
-        )
-    })
-}
+// Generate the get_storage helper using the shared macro
+get_service!(get_storage, storage, StorageService, "Storage");
 
 /// GET /storage - List objects with optional prefix.
 pub(crate) async fn storage_list(
