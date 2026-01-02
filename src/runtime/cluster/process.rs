@@ -151,7 +151,7 @@ pub fn shutdown_all_workers() {
             #[cfg(unix)]
             {
                 // Send SIGTERM for graceful shutdown
-                if let Err(e) = kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+                if let Err(e) = kill(Pid::from_raw(pid.cast_signed()), Signal::SIGTERM) {
                     error!("Failed to send SIGTERM to worker process {}: {}", pid, e);
                 } else {
                     info!("Sent SIGTERM to worker process {}", pid);
