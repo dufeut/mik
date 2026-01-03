@@ -218,10 +218,25 @@ impl Host {
         // Resolve fuel budget: use configured value or default
         let fuel_budget = config.fuel_budget.unwrap_or(constants::DEFAULT_FUEL_BUDGET);
 
+        // Validate user_modules directory if provided
+        let user_modules_dir = config.user_modules_path.clone().filter(|dir| {
+            if dir.is_dir() {
+                info!(
+                    "Tenant modules: {} -> /tenant/{{tenant-id}}/{{module}}/",
+                    dir.display()
+                );
+                true
+            } else {
+                warn!("Tenant modules directory not found: {}", dir.display());
+                false
+            }
+        });
+
         let shared = Arc::new(SharedState {
             engine,
             linker,
             modules_dir,
+            user_modules_dir,
             cache,
             single_component,
             single_component_name,

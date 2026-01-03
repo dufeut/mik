@@ -41,6 +41,9 @@ pub enum ConfigError {
 pub struct HostConfig {
     /// Directory containing .wasm modules, or single component path.
     pub modules_path: PathBuf,
+    /// Directory containing tenant modules (optional).
+    /// Structure: `user_modules_path/{tenant-id}/{module}.wasm`
+    pub user_modules_path: Option<PathBuf>,
     /// Maximum number of modules to keep loaded (LRU eviction).
     pub cache_size: usize,
     /// Maximum cache memory in bytes (byte-aware eviction).
@@ -80,6 +83,7 @@ impl Default for HostConfig {
     fn default() -> Self {
         Self {
             modules_path: PathBuf::from(constants::DEFAULT_MODULES_DIR),
+            user_modules_path: None,
             cache_size: constants::DEFAULT_CACHE_SIZE,
             max_cache_bytes: constants::DEFAULT_CACHE_MB * 1024 * 1024,
             static_dir: None,

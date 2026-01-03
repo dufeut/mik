@@ -125,6 +125,12 @@ pub struct ServerConfig {
     /// Directory containing WASM modules (default: "modules/")
     #[serde(default = "default_modules_dir")]
     pub modules: String,
+    /// Directory containing tenant WASM modules (optional).
+    ///
+    /// Structure: `user-modules/{tenant-id}/{module}.wasm`
+    /// Enables multi-tenant routing via `/tenant/{tenant-id}/{module}/`
+    #[serde(default)]
+    pub user_modules: Option<String>,
     /// Directory containing JS/TS orchestration scripts (optional)
     #[serde(default)]
     pub scripts: Option<String>,
@@ -179,6 +185,7 @@ impl Default for ServerConfig {
             auto: default_auto(),
             port: default_port(),
             modules: default_modules_dir(),
+            user_modules: None,
             scripts: None,
             r#static: None,
             cache_size: 0,   // 0 = auto-detect

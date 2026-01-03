@@ -11,6 +11,8 @@ target-linux/
 !tests/fixtures/multilang/**/*.wasm
 !tests/fixtures/modules/*.wasm
 
+*.openapi.json
+
 # IDE
 .vscode/
 .idea/
@@ -41,3 +43,4 @@ __pycache__/
 .claude/
 CLAUDE.md
 nul
+

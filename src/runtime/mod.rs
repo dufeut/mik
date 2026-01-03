@@ -57,10 +57,12 @@ pub mod cluster;
 pub mod compression;
 pub mod endpoints;
 pub mod error;
+pub mod gateway;
 mod host;
 pub mod host_config;
 pub mod host_state;
 pub mod lb;
+pub mod module_path;
 mod observability;
 pub mod reliability;
 pub mod request;
@@ -122,8 +124,12 @@ use wasmtime::component::{Component, Linker};
 // Re-export for script.rs
 pub(crate) use wasm_executor::execute_wasm_request_internal;
 
-/// Route prefix for WASM module requests.
+/// Route prefix for platform WASM module requests.
 pub const RUN_PREFIX: &str = "/run/";
+
+/// Route prefix for tenant WASM module requests.
+/// Format: `/tenant/<tenant-id>/<module>/`
+pub const TENANT_PREFIX: &str = "/tenant/";
 
 /// Route prefix for OpenAPI schema requests.
 pub const OPENAPI_PREFIX: &str = "/openapi/";
@@ -177,6 +183,9 @@ pub struct SharedState {
     pub(crate) engine: Engine,
     pub(crate) linker: Linker<HostState>,
     pub(crate) modules_dir: PathBuf,
+    /// Directory containing tenant modules (optional).
+    /// Structure: `user_modules_dir/{tenant-id}/{module}.wasm`
+    pub(crate) user_modules_dir: Option<PathBuf>,
     pub(crate) cache: ModuleCache,
     pub(crate) single_component: Option<Arc<Component>>,
     /// Name of the single component (derived from filename, for routing).

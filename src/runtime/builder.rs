@@ -85,6 +85,8 @@ struct TomlServerConfig {
     #[serde(default = "default_modules_dir")]
     modules: String,
     #[serde(default)]
+    user_modules: Option<String>,
+    #[serde(default)]
     r#static: Option<String>,
     #[serde(default)]
     cache_size: usize,
@@ -402,6 +404,7 @@ impl RuntimeBuilder {
 
         self.config = HostConfig {
             modules_path: PathBuf::from(&server.modules),
+            user_modules_path: server.user_modules.clone().map(PathBuf::from),
             cache_size,
             max_cache_bytes,
             static_dir: server.r#static.clone().map(PathBuf::from),
@@ -480,6 +483,7 @@ impl RuntimeBuilder {
 
         self.config = HostConfig {
             modules_path: PathBuf::from(&server.modules),
+            user_modules_path: server.user_modules.clone().map(PathBuf::from),
             cache_size,
             max_cache_bytes,
             static_dir: server.r#static.clone().map(PathBuf::from),

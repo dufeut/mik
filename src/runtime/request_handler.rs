@@ -10,7 +10,9 @@ use crate::constants;
 use crate::runtime::compression::{accepts_gzip, maybe_compress_response};
 use crate::runtime::endpoints::{handle_health_endpoint, handle_metrics_endpoint};
 use crate::runtime::error::{self, Error};
+use crate::runtime::gateway::{self, MIK_API_PREFIX};
 use crate::runtime::host_state::HyperCompatibleBody;
+use crate::runtime::module_path::ModulePath;
 use crate::runtime::schema_handler;
 use crate::runtime::script;
 use crate::runtime::spans::{SpanBuilder, SpanCollector, SpanSummary};
@@ -20,7 +22,7 @@ use crate::runtime::types::ErrorCategory;
 use crate::runtime::wasm_executor::execute_wasm_request;
 use crate::runtime::{
     HEALTH_PATH, METRICS_PATH, OPENAPI_PREFIX, RUN_PREFIX, SCRIPT_PREFIX, STATIC_PREFIX,
-    SharedState,
+    SharedState, TENANT_PREFIX,
 };
 use anyhow::Result;
 use http_body_util::{BodyExt, Full, Limited};
@@ -259,6 +261,60 @@ pub(crate) fn parse_module_route(run_path: &str) -> (String, String) {
     }
 }
 
+/// Parses the module path from a run path, supporting both platform and tenant modules.
+///
+/// For platform modules: `/run/hello/items` → `(Platform { name: "hello" }, "/items")`
+/// For tenant modules: `/run/tenant-abc/orders/items` → `(Tenant { tenant_id: "tenant-abc", name: "orders" }, "/items")`
+///
+/// Returns `None` if the path is empty.
+pub(crate) fn parse_module_path_route(run_path: &str) -> Option<(ModulePath, String)> {
+    if run_path.is_empty() {
+        return None;
+    }
+
+    // Split into segments
+    let segments: Vec<&str> = run_path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    // Decode percent-encoded segments
+    let decode = |s: &str| -> String {
+        if s.contains('%') {
+            percent_decode_str(s).decode_utf8_lossy().into_owned()
+        } else {
+            s.to_string()
+        }
+    };
+
+    // Try tenant path first: {tenant-id}/{module}/...
+    if segments.len() >= 2 {
+        let tenant_id = decode(segments[0]);
+        let module_name = decode(segments[1]);
+
+        // Build handler path from remaining segments
+        let handler_path = if segments.len() > 2 {
+            format!("/{}", segments[2..].join("/"))
+        } else {
+            "/".to_string()
+        };
+
+        // Create potential tenant module path
+        let tenant_path = ModulePath::Tenant {
+            tenant_id,
+            name: module_name,
+        };
+
+        return Some((tenant_path, handler_path));
+    }
+
+    // Single segment = platform module
+    let module_name = decode(segments[0]);
+    let module_path = ModulePath::Platform { name: module_name };
+    Some((module_path, "/".to_string()))
+}
+
 /// Result type for module resolution.
 pub(crate) enum ModuleResolution {
     /// Successfully resolved module with component and handler path.
@@ -272,15 +328,18 @@ pub(crate) enum ModuleResolution {
     Response(Response<Full<Bytes>>),
 }
 
-/// Resolves the module component from the path.
+/// Resolves a platform module from `/run/<module>/*` path.
+///
+/// Platform modules are loaded from `modules/<module>.wasm`.
+/// For tenant modules, use `resolve_tenant_module` with `/tenant/<tenant-id>/<module>/*` paths.
 pub(crate) async fn resolve_module(
     shared: &Arc<SharedState>,
     path: &str,
 ) -> Result<ModuleResolution> {
-    // All module routes must start with /run/
+    // All platform module routes must start with /run/
     let Some(run_path) = path.strip_prefix(RUN_PREFIX) else {
         return Ok(ModuleResolution::Response(not_found(
-            "Not found. WASM modules are served at /run/<module>/",
+            "Not found. Platform modules: /run/<module>/, Tenant modules: /tenant/<tenant-id>/<module>/",
         )?));
     };
 
@@ -308,8 +367,47 @@ pub(crate) async fn resolve_module(
         return Ok(ModuleResolution::Response(error_response(&err)?));
     }
 
-    // Multi-module mode: load from directory
+    // Multi-module mode: load platform module
     resolve_multi_module(shared, &module, handler_path).await
+}
+
+/// Resolves a tenant module from `/tenant/<tenant-id>/<module>/*` path.
+///
+/// Tenant modules are loaded from `user-modules/<tenant-id>/<module>.wasm`.
+pub(crate) async fn resolve_tenant_module(
+    shared: &Arc<SharedState>,
+    path: &str,
+) -> Result<ModuleResolution> {
+    // All tenant module routes must start with /tenant/
+    let Some(tenant_path) = path.strip_prefix(TENANT_PREFIX) else {
+        return Ok(ModuleResolution::Response(not_found(
+            "Not found. Tenant modules: /tenant/<tenant-id>/<module>/",
+        )?));
+    };
+
+    // Check if user_modules_dir is configured
+    if shared.user_modules_dir.is_none() {
+        return Ok(ModuleResolution::Response(error_response(
+            &error::Error::InvalidRequest("Tenant modules not configured".to_string()),
+        )?));
+    }
+
+    // Parse tenant path: <tenant-id>/<module>/<handler-path>
+    let Some((module_path, handler_path)) = parse_module_path_route(tenant_path) else {
+        return Ok(ModuleResolution::Response(not_found(
+            "Invalid tenant path. Use /tenant/<tenant-id>/<module>/",
+        )?));
+    };
+
+    // Ensure it's actually a tenant path (has both tenant_id and module name)
+    if !module_path.is_tenant() {
+        return Ok(ModuleResolution::Response(not_found(
+            "Invalid tenant path. Use /tenant/<tenant-id>/<module>/",
+        )?));
+    }
+
+    // Load tenant module
+    resolve_multi_module_path(shared, module_path, handler_path).await
 }
 
 /// Resolves a module in multi-module mode (circuit breaker, semaphore, loading).
@@ -370,6 +468,76 @@ pub(crate) async fn resolve_multi_module(
             shared.circuit_breaker.record_failure(module);
             // Use typed error for response
             let err = error::Error::module_not_found(module);
+            Ok(ModuleResolution::Response(error_response(&err)?))
+        },
+    }
+}
+
+/// Resolves a module using `ModulePath` (supports both platform and tenant modules).
+///
+/// This uses `get_or_load_module_path` which handles:
+/// - Cache key based on `ModulePath::cache_key()`
+/// - File path resolution using `ModulePath::wasm_path()`
+pub(crate) async fn resolve_multi_module_path(
+    shared: &Arc<SharedState>,
+    module_path: ModulePath,
+    handler_path: String,
+) -> Result<ModuleResolution> {
+    let cache_key = module_path.cache_key();
+    let handler_name = module_path.handler_name();
+
+    // Check circuit breaker before processing
+    if let Err(e) = shared.circuit_breaker.check_request(&cache_key) {
+        warn!("Circuit breaker blocked request to '{}': {}", cache_key, e);
+        let err = error::Error::circuit_breaker_open(&handler_name);
+        let mut resp = error_response(&err)?;
+        resp.headers_mut().insert(
+            "Retry-After",
+            CIRCUIT_BREAKER_RETRY_AFTER_SECS
+                .to_string()
+                .parse()
+                .expect("valid Retry-After header value"),
+        );
+        return Ok(ModuleResolution::Response(resp));
+    }
+
+    // Acquire per-module semaphore permit
+    let module_semaphore = shared.get_module_semaphore(&cache_key);
+    let module_permit = if let Ok(permit) = module_semaphore.try_acquire_owned() {
+        Some(permit)
+    } else {
+        warn!(
+            "Module '{}' overloaded (max {} concurrent requests)",
+            handler_name, shared.config.max_per_module_requests
+        );
+        let err = error::Error::rate_limit_exceeded(format!(
+            "Module '{}' overloaded (max {} concurrent)",
+            handler_name, shared.config.max_per_module_requests
+        ));
+        let mut resp = error_response(&err)?;
+        resp.headers_mut().insert(
+            "Retry-After",
+            MODULE_OVERLOAD_RETRY_AFTER_SECS
+                .to_string()
+                .parse()
+                .expect("valid Retry-After header value"),
+        );
+        return Ok(ModuleResolution::Response(resp));
+    };
+
+    match shared.get_or_load_module_path(&module_path).await {
+        Ok(comp) => Ok(ModuleResolution::Success {
+            component: comp,
+            handler_path,
+            module_name: Some(handler_name),
+            module_permit,
+        }),
+        Err(e) => {
+            warn!("Module load failed: {}", e);
+            // Record failure in circuit breaker
+            shared.circuit_breaker.record_failure(&cache_key);
+            // Use typed error for response
+            let err = error::Error::module_not_found(&handler_name);
             Ok(ModuleResolution::Response(error_response(&err)?))
         },
     }
@@ -457,6 +625,12 @@ pub(crate) async fn handle_request_inner(
         };
     }
 
+    // Handle gateway API requests: /_mik/*
+    if path.starts_with(MIK_API_PREFIX) {
+        return gateway::handle_gateway_request(&shared, path)
+            .map(|resp| maybe_compress_response(resp, client_accepts_gzip));
+    }
+
     // Handle OpenAPI schema requests: /openapi/<module>
     if let Some(module_name) = path.strip_prefix(OPENAPI_PREFIX) {
         // Strip trailing slash if present
@@ -490,17 +664,22 @@ pub(crate) async fn handle_request_inner(
         };
     }
 
-    // Resolve module component
-    let (component, handler_path, module_name, module_permit) =
-        match resolve_module(&shared, path).await? {
-            ModuleResolution::Success {
-                component,
-                handler_path,
-                module_name,
-                module_permit,
-            } => (component, handler_path, module_name, module_permit),
-            ModuleResolution::Response(resp) => return Ok(resp),
-        };
+    // Resolve module component (platform or tenant)
+    let resolution = if path.starts_with(TENANT_PREFIX) {
+        resolve_tenant_module(&shared, path).await?
+    } else {
+        resolve_module(&shared, path).await?
+    };
+
+    let (component, handler_path, module_name, module_permit) = match resolution {
+        ModuleResolution::Success {
+            component,
+            handler_path,
+            module_name,
+            module_permit,
+        } => (component, handler_path, module_name, module_permit),
+        ModuleResolution::Response(resp) => return Ok(resp),
+    };
 
     // Rewrite the request URI and collect body
     let req = rewrite_request_path(req, handler_path)?;
@@ -513,7 +692,9 @@ pub(crate) async fn handle_request_inner(
 
     // Execute WASM request (keep module_permit in scope for semaphore)
     let _module_permit = module_permit;
+    let exec_start = Instant::now();
     let result = execute_wasm_request(shared.clone(), component, req).await;
+    let exec_duration = exec_start.elapsed();
 
     // Record success/failure in circuit breaker
     if let Some(ref module) = module_name {
@@ -523,7 +704,21 @@ pub(crate) async fn handle_request_inner(
         }
     }
 
-    result.map(|resp| maybe_compress_response(resp, client_accepts_gzip))
+    // Add gateway response headers (X-Mik-Duration-Ms, X-Mik-Handler)
+    result.map(|mut resp| {
+        // Add execution duration header
+        if let Ok(duration_value) = exec_duration.as_millis().to_string().parse() {
+            resp.headers_mut()
+                .insert("X-Mik-Duration-Ms", duration_value);
+        }
+        // Add handler name header
+        if let Some(ref handler_name) = module_name
+            && let Ok(handler_value) = handler_name.parse()
+        {
+            resp.headers_mut().insert("X-Mik-Handler", handler_value);
+        }
+        maybe_compress_response(resp, client_accepts_gzip)
+    })
 }
 
 /// Categorize an error by walking the error chain.
