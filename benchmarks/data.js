@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767472644664,
+  "lastUpdate": 1767474009475,
   "repoUrl": "https://github.com/dufeutech/mik",
   "entries": {
     "Rust Benchmarks": [
@@ -1199,6 +1199,246 @@ window.BENCHMARK_DATA = {
             "name": "concurrent/mixed_workload_read_heavy",
             "value": 133049,
             "range": "± 3881",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "committer": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "distinct": true,
+          "id": "9e1dad768d8ac28a76701cdc001ab826d7a276c9",
+          "message": "docs: add multi-tenant guide to sidebar\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-01-03T14:47:25-06:00",
+          "tree_id": "18a66e26a881ed48c182bb534413b3889e8858a5",
+          "url": "https://github.com/dufeutech/mik/commit/9e1dad768d8ac28a76701cdc001ab826d7a276c9"
+        },
+        "date": 1767474009141,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "circuit_breaker/check_request_closed",
+            "value": 360,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_and_record_success",
+            "value": 1393,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/10",
+            "value": 3934,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/100",
+            "value": 39665,
+            "range": "± 387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/1000",
+            "value": 410689,
+            "range": "± 3333",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_hit",
+            "value": 107,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_miss",
+            "value": 88,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_insert",
+            "value": 3894,
+            "range": "± 1748",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_with_eviction",
+            "value": 2710,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/runtime_create",
+            "value": 204773,
+            "range": "± 1468",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_simple",
+            "value": 2197,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_json_transform",
+            "value": 8478,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_function_call",
+            "value": 4045,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/script_preprocess",
+            "value": 501,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/circuit_breaker_concurrent",
+            "value": 385205,
+            "range": "± 5995",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/module_cache_concurrent",
+            "value": 162738,
+            "range": "± 1644",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_single",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/10",
+            "value": 111,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/100",
+            "value": 1105,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/1000",
+            "value": 11690,
+            "range": "± 76",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_exhausted",
+            "value": 148,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/1024",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/8192",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/65536",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "store_pool/placeholder_acquire_release",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_next",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/2",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/4",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/8",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/16",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/32",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_increment",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/request_lifecycle",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_concurrent",
+            "value": 129142,
+            "range": "± 2216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/buffer_pool_contention",
+            "value": 135054,
+            "range": "± 2967",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/mixed_workload_read_heavy",
+            "value": 129585,
+            "range": "± 1893",
             "unit": "ns/iter"
           }
         ]
