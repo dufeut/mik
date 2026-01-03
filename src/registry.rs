@@ -1,7 +1,9 @@
 //! Registry operations for WASM components.
 //!
 //! Downloads WASM components from HTTP(S) URLs with GitHub authentication support.
+//! Includes automatic retry with exponential backoff for transient failures.
 
+use crate::reliability::retry::{RetryConfig, retry_sync};
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io;
@@ -17,7 +19,7 @@ const HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// `GitHub` domain patterns for authentication.
 const GITHUB_DOMAINS: [&str; 2] = ["github.com", "githubusercontent.com"];
 
-/// Download a file from any HTTP(S) URL.
+/// Download a file from any HTTP(S) URL with automatic retry.
 pub fn download(url: &str, output_path: &Path) -> Result<()> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent)?;
@@ -30,7 +32,7 @@ pub fn download(url: &str, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Download and extract a .tar.gz archive.
+/// Download and extract a .tar.gz archive with automatic retry.
 #[allow(dead_code)]
 pub fn download_and_extract(url: &str, output_dir: &Path) -> Result<()> {
     fs::create_dir_all(output_dir)?;
@@ -44,25 +46,34 @@ pub fn download_and_extract(url: &str, output_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Download from URL, handling `GitHub` authentication.
+/// Download from URL with retry, handling `GitHub` authentication.
 fn download_from_url(url: &str) -> Result<ureq::Body> {
-    let config = ureq::Agent::config_builder()
-        .timeout_recv_body(Some(Duration::from_secs(HTTP_RECV_BODY_TIMEOUT_SECS)))
-        .timeout_connect(Some(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS)))
-        .build();
-    let agent: ureq::Agent = config.into();
-    let mut request = agent.get(url).header("Accept", "application/octet-stream");
+    let url_owned = url.to_string();
+    let token = if is_github_url(url) {
+        get_github_token()
+    } else {
+        None
+    };
 
-    if is_github_url(url)
-        && let Some(token) = get_github_token()
-    {
-        request = request.header("Authorization", &format!("Bearer {token}"));
-    }
+    retry_sync(&RetryConfig::network(), "http_download", move || {
+        let config = ureq::Agent::config_builder()
+            .timeout_recv_body(Some(Duration::from_secs(HTTP_RECV_BODY_TIMEOUT_SECS)))
+            .timeout_connect(Some(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS)))
+            .build();
+        let agent: ureq::Agent = config.into();
+        let mut request = agent
+            .get(&url_owned)
+            .header("Accept", "application/octet-stream");
 
-    Ok(request
-        .call()
-        .context("Failed to make HTTP request")?
-        .into_body())
+        if let Some(ref t) = token {
+            request = request.header("Authorization", &format!("Bearer {t}"));
+        }
+
+        request
+            .call()
+            .map(|resp| resp.into_body())
+            .context("HTTP request failed")
+    })
 }
 
 /// Check if URL is a `GitHub` domain.

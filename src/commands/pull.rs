@@ -20,6 +20,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::manifest::{Dependency, Manifest};
 use crate::registry;
+use crate::reliability::retry::{RetryConfig, retry_anyhow, retry_sync};
 
 /// Get the OCI cache directory for content-addressable storage.
 fn get_oci_cache_dir() -> Result<PathBuf> {
@@ -141,17 +142,20 @@ pub async fn pull_oci(oci_ref: &str, output_path: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    // Create OCI client with default config (anonymous access)
-    let client = Client::default();
-
-    // Try to authenticate (for public registries this gets anonymous token)
-    let auth = oci_client::secrets::RegistryAuth::Anonymous;
-
-    // Pull the manifest to get layer info
-    let (manifest, _digest) = client
-        .pull_manifest(&reference, &auth)
-        .await
-        .with_context(|| format!("Failed to pull manifest for {oci_ref}"))?;
+    // Pull the manifest to get layer info (with retry for transient failures)
+    let reference_clone = reference.clone();
+    let (manifest, _digest) = retry_anyhow(RetryConfig::network(), "oci_pull_manifest", || {
+        let client = Client::default();
+        let reference = reference_clone.clone();
+        async move {
+            client
+                .pull_manifest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+                .await
+                .context("Failed to pull manifest")
+        }
+    })
+    .await
+    .with_context(|| format!("Failed to pull manifest for {oci_ref}"))?;
 
     // Get the first layer (should be the .wasm file)
     let layers = match &manifest {
@@ -184,12 +188,23 @@ pub async fn pull_oci(oci_ref: &str, output_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // Cache miss - download blob to memory first for caching
-    let mut blob_data = Vec::new();
-    client
-        .pull_blob(&reference, wasm_layer, &mut blob_data)
-        .await
-        .with_context(|| format!("Failed to pull blob from {oci_ref}"))?;
+    // Cache miss - download blob to memory first for caching (with retry)
+    let wasm_layer_clone = wasm_layer.clone();
+    let blob_data = retry_anyhow(RetryConfig::network(), "oci_pull_blob", || {
+        let client = Client::default();
+        let reference = reference.clone();
+        let layer = wasm_layer_clone.clone();
+        async move {
+            let mut data = Vec::new();
+            client
+                .pull_blob(&reference, &layer, &mut data)
+                .await
+                .with_context(|| "Failed to pull blob")?;
+            Ok(data)
+        }
+    })
+    .await
+    .with_context(|| format!("Failed to pull blob from {oci_ref}"))?;
 
     // Cache the blob for future use
     if let Err(e) = cache_blob(&wasm_layer.digest, &blob_data) {
@@ -399,17 +414,19 @@ fn sanitize_url_for_path(url: &str) -> String {
     format!("{name}-{hash:x}")
 }
 
-/// Fetch updates from the remote repository.
+/// Fetch updates from the remote repository (with retry for transient failures).
 fn fetch_updates(repo: &git2::Repository) -> Result<()> {
-    let mut remote = repo
-        .find_remote("origin")
-        .context("Failed to find 'origin' remote")?;
+    retry_sync(&RetryConfig::network(), "git_fetch", || {
+        let mut remote = repo
+            .find_remote("origin")
+            .context("Failed to find 'origin' remote")?;
 
-    remote
-        .fetch(&["refs/heads/*:refs/heads/*"], None, None)
-        .context("Failed to fetch updates from remote")?;
+        remote
+            .fetch(&["refs/heads/*:refs/heads/*"], None, None)
+            .context("Failed to fetch updates from remote")?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Checkout a specific git reference.

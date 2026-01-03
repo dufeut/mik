@@ -25,8 +25,23 @@
 //!     cb.record_success("database");
 //! }
 //! ```
+//!
+//! ## Retry with Backoff
+//!
+//! For transient failures, use retry with exponential backoff:
+//!
+//! ```rust,ignore
+//! use mik::reliability::retry::{retry_anyhow, RetryConfig};
+//!
+//! let result = retry_anyhow(
+//!     RetryConfig::network(),
+//!     "fetch_registry",
+//!     || async { client.fetch(url).await },
+//! ).await?;
+//! ```
 
 mod circuit_breaker;
+pub mod retry;
 pub mod security;
 
 // Re-export circuit breaker types
