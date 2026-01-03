@@ -51,6 +51,7 @@ pub fn check_tool(name: &str) -> Result<()> {
 /// require_tool("cargo-component", "cargo install cargo-component")?;
 /// require_tool_with_info("wac", "cargo install wac-cli", Some("https://github.com/bytecodealliance/wac"))?;
 /// ```
+#[allow(dead_code)]
 pub fn require_tool(name: &str, install_cmd: &str) -> Result<()> {
     require_tool_with_info(name, install_cmd, None)
 }

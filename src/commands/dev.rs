@@ -12,6 +12,7 @@ use crate::daemon::paths::{get_daemon_pid, get_state_path};
 use crate::daemon::process::{self, SpawnConfig};
 use crate::daemon::startup::ensure_daemon_running_for_services;
 use crate::daemon::state::{Instance, StateStore, Status};
+use crate::manifest::Manifest;
 
 /// Execute the dev command.
 ///
@@ -46,6 +47,11 @@ pub async fn execute(port: u16, no_services: bool) -> Result<()> {
     // Get project name from mik.toml
     let name = get_project_name(&config_path).unwrap_or_else(|| "dev".to_string());
 
+    // Load watch_debounce_ms from manifest, falling back to default (300ms)
+    let debounce_ms = Manifest::load_server_config_from(&config_path)
+        .map(|c| c.watch_debounce_ms)
+        .unwrap_or(300);
+
     println!("Watching for changes...");
     println!("Server: http://127.0.0.1:{port}");
     println!("Press Ctrl+C to stop\n");
@@ -67,14 +73,20 @@ pub async fn execute(port: u16, no_services: bool) -> Result<()> {
     let store = StateStore::open(&state_path)?;
     save_instance_state(&store, &name, port, info.pid, &config_path)?;
 
-    // Start watch loop
+    // Start watch loop with configurable debounce
     let pid_clone = current_pid.clone();
     let spawn_config_clone = spawn_config.clone();
     let name_clone = name.clone();
-
-    crate::daemon::watch::watch_loop(&modules_dir, &config_path, move |event| {
+    let mut callback = move |event| {
         handle_watch_event(event, &pid_clone, &name_clone, &spawn_config_clone);
-    })
+    };
+
+    crate::daemon::watch::watch_loop_with_debounce(
+        &modules_dir,
+        &config_path,
+        debounce_ms,
+        &mut callback,
+    )
     .await?;
 
     // Cleanup on exit

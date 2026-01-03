@@ -111,7 +111,14 @@ impl SchemaCache {
     pub async fn get(&self, module_path: &str, content: &str) -> Option<String> {
         let path = self.cache_path(module_path, content);
 
-        tokio::fs::read_to_string(&path).await.ok()
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => Some(content),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to read cached schema");
+                None
+            },
+        }
     }
 
     /// Store a schema in the cache.

@@ -201,12 +201,19 @@ pub async fn run_detached(name: &str, port: u16) -> Result<()> {
 /// List all tracked WASM instances.
 ///
 /// Shows status, port, PID, and uptime for each instance.
-pub fn ps() -> Result<()> {
+/// If `json` is true, outputs machine-readable JSON format.
+pub fn ps(json: bool) -> Result<()> {
+    use crate::daemon::http::types::InstanceResponse;
+
     let state_path = get_state_path()?;
 
     // Check if state file exists
     if !state_path.exists() {
-        println!("No instances found. Start one with 'mik run --detach' or 'mik dev'");
+        if json {
+            println!("[]");
+        } else {
+            println!("No instances found. Start one with 'mik run --detach' or 'mik dev'");
+        }
         return Ok(());
     }
 
@@ -214,7 +221,21 @@ pub fn ps() -> Result<()> {
     let instances = store.list_instances()?;
 
     if instances.is_empty() {
-        println!("No instances found. Start one with 'mik run --detach' or 'mik dev'");
+        if json {
+            println!("[]");
+        } else {
+            println!("No instances found. Start one with 'mik run --detach' or 'mik dev'");
+        }
+        return Ok(());
+    }
+
+    if json {
+        // Convert to InstanceResponse for JSON serialization
+        let responses: Vec<InstanceResponse> =
+            instances.iter().map(InstanceResponse::from).collect();
+        let json_output = serde_json::to_string_pretty(&responses)
+            .context("Failed to serialize instances to JSON")?;
+        println!("{json_output}");
         return Ok(());
     }
 

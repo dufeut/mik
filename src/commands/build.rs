@@ -13,7 +13,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{check_tool, require_tool, require_tool_with_info};
+use super::{check_tool, require_tool_with_info};
 use crate::manifest::{Dependency, Manifest};
 use crate::ui;
 use crate::utils::{format_bytes, get_cargo_name};
@@ -172,7 +172,14 @@ pub async fn execute(
     no_schema: bool,
 ) -> Result<()> {
     // Load mik.toml if it exists
-    let manifest = Manifest::load().ok();
+    let manifest = match Manifest::load() {
+        Ok(m) => Some(m),
+        Err(e) if e.to_string().contains("not found") => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to load mik.toml, using defaults");
+            None
+        },
+    };
 
     // Resolve language: flag > mik.toml > rust
     let language = lang_override
@@ -263,8 +270,20 @@ fn build_rust(name: &str, release: bool) -> Result<(PathBuf, PathBuf)> {
         bail!("No Cargo.toml found. Run from a Rust project directory or use --lang flag.");
     }
 
-    // Check for cargo-component
-    require_tool("cargo-component", "cargo install cargo-component")?;
+    // Check for cargo-component with helpful error hints
+    if check_tool("cargo-component").is_err() {
+        ui::print_section("Missing Required Tool: cargo-component");
+        eprintln!();
+        eprintln!("cargo-component is required to build WASI components from Rust.");
+        eprintln!();
+        eprintln!("Install with:");
+        eprintln!("  cargo install cargo-component");
+        eprintln!();
+        eprintln!("For more information:");
+        eprintln!("  https://github.com/bytecodealliance/cargo-component");
+        eprintln!();
+        bail!("Missing required tool: cargo-component");
+    }
 
     // Build with cargo-component
     let mut args = vec!["component", "build", "--target", "wasm32-wasip2"];

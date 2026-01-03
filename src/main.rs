@@ -72,6 +72,10 @@ struct Cli {
     /// Show detailed version information including dependencies
     #[arg(long, global = true)]
     version_verbose: bool,
+
+    /// Enable verbose/debug output for any command
+    #[arg(short, long, global = true)]
+    verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -125,7 +129,12 @@ enum Commands {
     ///
     /// Examples:
     ///   mik ps                     # List all instances
-    Ps,
+    ///   mik ps --json              # Output as JSON for scripting
+    Ps {
+        /// Output as JSON for scripting and automation
+        #[arg(long)]
+        json: bool,
+    },
     /// Show real-time instance statistics
     ///
     /// Displays live CPU and memory usage for running instances.
@@ -445,6 +454,13 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Handle --verbose flag: set RUST_LOG=debug if not already set
+    if cli.verbose && std::env::var("RUST_LOG").is_err() {
+        // SAFETY: This is called at program startup before any threads are spawned,
+        // so there are no concurrent reads/writes to environment variables.
+        unsafe { std::env::set_var("RUST_LOG", "debug") };
+    }
+
     // Handle missing subcommand
     let Some(command) = cli.command else {
         eprintln!("Error: A subcommand is required");
@@ -465,8 +481,8 @@ async fn main() -> Result<()> {
         Commands::Daemon { port } => {
             commands::daemon::start(port).await?;
         },
-        Commands::Ps => {
-            commands::daemon::ps()?;
+        Commands::Ps { json } => {
+            commands::daemon::ps(json)?;
         },
         Commands::Stats => {
             commands::daemon::stats().await?;

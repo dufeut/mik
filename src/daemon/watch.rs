@@ -101,9 +101,16 @@ impl ModuleWatcher {
 
     /// Tries to receive a watch event without blocking.
     ///
-    /// Returns `None` if no event is available.
+    /// Returns `None` if no event is available or channel is disconnected.
     pub fn try_recv(&self) -> Option<WatchEvent> {
-        self.receiver.try_recv().ok()
+        match self.receiver.try_recv() {
+            Ok(event) => Some(event),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                tracing::error!("Watch event channel disconnected - file watcher crashed");
+                None
+            },
+        }
     }
 }
 
@@ -160,6 +167,7 @@ fn handle_notify_event(
 }
 
 /// Default debounce duration for file events.
+#[allow(dead_code)] // Used by watch_loop wrapper
 const DEFAULT_DEBOUNCE_MS: u64 = 300;
 
 /// Tracks pending events for debouncing.
@@ -250,6 +258,7 @@ impl DebouncedEvents {
 /// * `modules_dir` - Path to the modules directory
 /// * `config_path` - Path to mik.toml
 /// * `on_reload` - Callback called when a reload is needed
+#[allow(dead_code)] // Convenience wrapper for watch_loop_with_debounce
 pub async fn watch_loop<F>(modules_dir: &Path, config_path: &Path, mut on_reload: F) -> Result<()>
 where
     F: FnMut(WatchEvent),
