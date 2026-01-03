@@ -1,6 +1,6 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767398874339,
-  "repoUrl": "https://github.com/dufeut/mik",
+  "lastUpdate": 1767416314755,
+  "repoUrl": "https://github.com/dufeutech/mik",
   "entries": {
     "Rust Benchmarks": [
       {
@@ -479,6 +479,246 @@ window.BENCHMARK_DATA = {
             "name": "concurrent/mixed_workload_read_heavy",
             "value": 121738,
             "range": "± 833",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "committer": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "distinct": true,
+          "id": "8f69c82afa42ac35a7d75f51d91560d277230798",
+          "message": "chore: update GitHub org from dufeut to dufeutech\n\nUpdate all references to the new organization URL across:\n- Repository URLs (Cargo.toml, install scripts)\n- Documentation links (README, docs site)\n- OCI registry references (ghcr.io)\n- Example Cargo.toml files (mik-sdk dependency)\n- Related project links\n- systemd service documentation\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-01-02T22:38:13-06:00",
+          "tree_id": "012d3fef9df8f0b4f8b51fad8de00920f8b1405d",
+          "url": "https://github.com/dufeutech/mik/commit/8f69c82afa42ac35a7d75f51d91560d277230798"
+        },
+        "date": 1767416314329,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "circuit_breaker/check_request_closed",
+            "value": 361,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_and_record_success",
+            "value": 1384,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/10",
+            "value": 3928,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/100",
+            "value": 40018,
+            "range": "± 357",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/1000",
+            "value": 410368,
+            "range": "± 3596",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_hit",
+            "value": 105,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_miss",
+            "value": 86,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_insert",
+            "value": 4153,
+            "range": "± 1215",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_with_eviction",
+            "value": 3109,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/runtime_create",
+            "value": 205368,
+            "range": "± 659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_simple",
+            "value": 2264,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_json_transform",
+            "value": 8421,
+            "range": "± 104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_function_call",
+            "value": 4049,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/script_preprocess",
+            "value": 504,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/circuit_breaker_concurrent",
+            "value": 380841,
+            "range": "± 5387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/module_cache_concurrent",
+            "value": 155379,
+            "range": "± 1769",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_single",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/10",
+            "value": 111,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/100",
+            "value": 1107,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/1000",
+            "value": 11564,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_exhausted",
+            "value": 151,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/1024",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/8192",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/65536",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "store_pool/placeholder_acquire_release",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_next",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/2",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/4",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/8",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/16",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/32",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_increment",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/request_lifecycle",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_concurrent",
+            "value": 121975,
+            "range": "± 1477",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/buffer_pool_contention",
+            "value": 124673,
+            "range": "± 1000",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/mixed_workload_read_heavy",
+            "value": 121925,
+            "range": "± 2001",
             "unit": "ns/iter"
           }
         ]
