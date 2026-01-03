@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767440582283,
+  "lastUpdate": 1767472644664,
   "repoUrl": "https://github.com/dufeutech/mik",
   "entries": {
     "Rust Benchmarks": [
@@ -959,6 +959,246 @@ window.BENCHMARK_DATA = {
             "name": "concurrent/mixed_workload_read_heavy",
             "value": 126152,
             "range": "± 1211",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "committer": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "distinct": true,
+          "id": "d7148ee2cf578c70dd0017377e9fd3a68ba50f76",
+          "message": "docs: add multi-tenant routing guide and example configs\n\nAdd comprehensive documentation for the multi-tenant routing feature\nincluding route patterns, isolation guarantees, and configuration.\n\nAdd example mik.toml configurations for common use cases:\n- minimal, multi-module, multi-tenant\n- production, with-scripts, with-load-balancer\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-01-03T12:22:47-06:00",
+          "tree_id": "2c92e508e2682403e85ece2b50ca91219cc4e3d0",
+          "url": "https://github.com/dufeutech/mik/commit/d7148ee2cf578c70dd0017377e9fd3a68ba50f76"
+        },
+        "date": 1767472644239,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "circuit_breaker/check_request_closed",
+            "value": 362,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_and_record_success",
+            "value": 1378,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/10",
+            "value": 3938,
+            "range": "± 74",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/100",
+            "value": 39716,
+            "range": "± 896",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/1000",
+            "value": 406740,
+            "range": "± 6137",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_hit",
+            "value": 107,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_miss",
+            "value": 88,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_insert",
+            "value": 3942,
+            "range": "± 1009",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_with_eviction",
+            "value": 2789,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/runtime_create",
+            "value": 205052,
+            "range": "± 2784",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_simple",
+            "value": 2205,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_json_transform",
+            "value": 8411,
+            "range": "± 296",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_function_call",
+            "value": 4111,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/script_preprocess",
+            "value": 488,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/circuit_breaker_concurrent",
+            "value": 388690,
+            "range": "± 6569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/module_cache_concurrent",
+            "value": 163482,
+            "range": "± 1484",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_single",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/10",
+            "value": 111,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/100",
+            "value": 1104,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/1000",
+            "value": 11537,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_exhausted",
+            "value": 148,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/1024",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/8192",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/65536",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "store_pool/placeholder_acquire_release",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_next",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/2",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/4",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/8",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/16",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/32",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_increment",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/request_lifecycle",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_concurrent",
+            "value": 133110,
+            "range": "± 1711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/buffer_pool_contention",
+            "value": 142111,
+            "range": "± 2434",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/mixed_workload_read_heavy",
+            "value": 133049,
+            "range": "± 3881",
             "unit": "ns/iter"
           }
         ]
