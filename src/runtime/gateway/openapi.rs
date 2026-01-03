@@ -70,10 +70,12 @@ pub fn aggregate_tenant_spec(user_modules_dir: &Path, tenant_id: &str) -> Option
         })
         .collect();
 
+    // Use empty prefix for tenant specs - gateway provides friendly URLs
+    // and rewrites to /tenant/{tenant_id}/... when proxying to mik
     Some(aggregate_specs(
         &format!("Tenant {tenant_id} API"),
         specs,
-        &format!("/tenant/{tenant_id}"),
+        "",
     ))
 }
 
@@ -324,8 +326,8 @@ mod tests {
         assert_eq!(spec["info"]["title"], "Tenant tenant-abc API");
 
         let paths = spec["paths"].as_object().unwrap();
-        // Tenant routes use /tenant/{tenant-id}/{module} prefix
-        assert!(paths.contains_key("/tenant/tenant-abc/orders/"));
+        // Tenant routes use friendly URLs (no prefix) - gateway rewrites to /tenant/... when proxying
+        assert!(paths.contains_key("/orders/"));
     }
 
     #[test]
