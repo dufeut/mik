@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1767416314755,
+  "lastUpdate": 1767440582283,
   "repoUrl": "https://github.com/dufeutech/mik",
   "entries": {
     "Rust Benchmarks": [
@@ -719,6 +719,246 @@ window.BENCHMARK_DATA = {
             "name": "concurrent/mixed_workload_read_heavy",
             "value": 121925,
             "range": "± 2001",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "committer": {
+            "email": "23062270+hlop3z@users.noreply.github.com",
+            "name": "hlop3z",
+            "username": "hlop3z"
+          },
+          "distinct": true,
+          "id": "829b6156a07b36d4b6f692abd432fcfdf33ffe74",
+          "message": "ci: add pre-release workflow for testing builds\n\nAdds manual workflow to create pre-release builds for testing:\n- Validates tag format (v0.1.0-rc.1, v0.1.0-beta.1, etc.)\n- Builds for all 6 target platforms\n- Creates GitHub pre-release with install instructions\n- Does not modify Cargo.toml version\n\nTrigger via Actions > Pre-Release > Run workflow\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
+          "timestamp": "2026-01-03T05:05:31-06:00",
+          "tree_id": "a83f44e1fa392c2ae51a763f6676e74d7d18ba87",
+          "url": "https://github.com/dufeutech/mik/commit/829b6156a07b36d4b6f692abd432fcfdf33ffe74"
+        },
+        "date": 1767440581316,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "circuit_breaker/check_request_closed",
+            "value": 361,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_and_record_success",
+            "value": 1434,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/10",
+            "value": 3921,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/100",
+            "value": 40308,
+            "range": "± 265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "circuit_breaker/check_multiple_keys/1000",
+            "value": 413013,
+            "range": "± 3037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_hit",
+            "value": 107,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_miss",
+            "value": 89,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_insert",
+            "value": 3835,
+            "range": "± 2099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "module_cache/cache_with_eviction",
+            "value": 2763,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/runtime_create",
+            "value": 205858,
+            "range": "± 784",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_simple",
+            "value": 2260,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_json_transform",
+            "value": 8377,
+            "range": "± 151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/eval_function_call",
+            "value": 4058,
+            "range": "± 68",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "script_execution/script_preprocess",
+            "value": 497,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/circuit_breaker_concurrent",
+            "value": 368450,
+            "range": "± 4238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_access/module_cache_concurrent",
+            "value": 148996,
+            "range": "± 1407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_single",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/10",
+            "value": 111,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/100",
+            "value": 1105,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_batch/1000",
+            "value": 11580,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_exhausted",
+            "value": 148,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/1024",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/8192",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "buffer_pool/acquire_release_size/65536",
+            "value": 11,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "store_pool/placeholder_acquire_release",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_next",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/2",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/4",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/8",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/16",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scheduling/round_robin_workers/32",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_increment",
+            "value": 2,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/request_lifecycle",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "metrics/counter_concurrent",
+            "value": 126387,
+            "range": "± 1774",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/buffer_pool_contention",
+            "value": 129150,
+            "range": "± 1150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent/mixed_workload_read_heavy",
+            "value": 126152,
+            "range": "± 1211",
             "unit": "ns/iter"
           }
         ]
